@@ -50,5 +50,5 @@ async def ingest_document(file: UploadFile = File(...)):
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    response = rag_service.query(request.message, request.domain)
-    return {"response": response}
+    # response is now a dict with 'response' and 'sources'
+    return rag_service.query(request.message, request.domain)
