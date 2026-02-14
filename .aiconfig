@@ -1,0 +1,55 @@
+# Generic AI Configuration
+# Works with various AI assistants
+
+framework: ace
+version: "2.0"
+
+# Context files to always include
+context:
+  always_load:
+    - .aceconfig
+    - .ace/roles/roles.md
+    - docs/context/ACTIVE_CONTEXT.md
+
+  on_demand:
+    - .ace/standards/*
+    - .ace/skills/*
+    - docs/adr/*
+    - docs/rca/regression-guards.yaml
+
+# Core rules
+rules:
+  - "Follow BMAD: Analyze → Plan → Execute → Verify"
+  - "Check regression guards before modifying files"
+  - "Create ADR for architectural decisions"
+  - "Update ACTIVE_CONTEXT.md after each session"
+  - "Every issue requires RCA"
+
+# Role activation
+roles:
+  planning: Architect
+  execution: Developer
+  verification: QA Engineer
+  incident: Incident Responder
+
+# Skill triggers
+skills:
+  database: .ace/skills/database-operations.md
+  api: .ace/skills/api-design.md
+  testing: .ace/skills/testing-strategy.md
+  migration: .ace/skills/migration-logic.md
+  refactor: .ace/skills/refactoring.md
+  review: .ace/skills/code-review.md
+  incident: .ace/skills/root-cause-analysis.md
+
+# Standards to enforce
+standards:
+  required:
+    - .ace/standards/coding.md
+    - .ace/standards/security.md
+  optional:
+    - .ace/standards/architecture.md
+    - .ace/standards/documentation.md
+    - .ace/standards/git-workflow.md
+    - .ace/standards/environment.md
+    - .ace/standards/observability.md

@@ -1,0 +1,96 @@
+# .aceconfig - ACE Framework Configuration
+# Version: 2.0
+
+version: "2.0"
+project_name: "app-mngmnt-rag-assistant"
+
+# Entry point for AI agents - files always loaded
+entry:
+  standards:
+    - .ace/standards/coding.md
+    - .ace/standards/security.md
+  roles: .ace/roles/roles.md
+
+# Critical rules (always in context - keep under 500 tokens)
+core_rules:
+  - "Never commit secrets, credentials, or API keys"
+  - "All code must pass linting before commit"
+  - "Follow patterns established in docs/adr/"
+  - "Update ACTIVE_CONTEXT.md after each session"
+  - "Verify against .ace/standards/ before completing any task"
+  - "Generate IMPLEMENTATION_PLAN.md before writing code"
+  - "Every task follows BMAD: Analyze → Plan → Execute → Verify"
+  - "Create ADR for any significant architectural decision"
+  - "Atomic commits with clear, descriptive messages"
+  - "No code generation without reading existing code first"
+  - "Check regression guards before modifying any guarded file"
+  - "Every issue requires RCA with regression prevention"
+
+# Task-to-skill mapping (auto-load relevant skill)
+skill_triggers:
+  database: .ace/skills/database-operations.md
+  api: .ace/skills/api-design.md
+  testing: .ace/skills/testing-strategy.md
+  migration: .ace/skills/migration-logic.md
+  refactor: .ace/skills/refactoring.md
+  issue: .ace/skills/root-cause-analysis.md
+  bug: .ace/skills/root-cause-analysis.md
+  incident: .ace/skills/root-cause-analysis.md
+
+# Role routing based on mode
+role_routing:
+  PLANNING: Architect
+  EXECUTION: Developer
+  VERIFICATION: QA Engineer
+  INCIDENT: Incident Responder
+  RESEARCH: Data Scientist
+  PUBLICATION: Scientific Editor
+
+# Validation hooks
+hooks:
+  pre_generation:
+    - check_active_context
+    - load_relevant_adrs
+    - check_regression_guards
+  post_generation:
+    - validate_against_standards
+    - verify_regression_invariants
+    - run_regression_tests
+    - update_active_context
+  pre_commit:
+    - lint
+    - test
+    - regression_tests
+    - security_scan
+    - guard_compliance_check
+  on_issue:
+    - create_incident
+    - capture_evidence
+  post_rca:
+    - create_regression_guard
+    - update_standards
+    - verify_regression_tests
+
+# Context management
+context:
+  active_context_path: docs/context/ACTIVE_CONTEXT.md
+  planning_path: docs/planning/
+  rca_path: docs/rca/
+  max_context_files: 5
+  auto_load_adrs: true
+  auto_load_guards: true
+
+# RCA and Regression Prevention
+rca:
+  template: docs/rca/RCA-000-template.md
+  guards_file: docs/rca/regression-guards.yaml
+  require_tests: true
+  require_guard: true
+  require_standard_update: true
+
+# Feedback and metrics
+feedback:
+  log_path: .ace/feedback/log.md
+  track_prompt_success: true
+  track_violations: true
+  track_regressions: true

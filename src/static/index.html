@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SOP Agent</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>SOP Agent for Managers</h1>
+
+      <div class="upload-section">
+        <h2>Ingest Documents</h2>
+        <input type="file" id="pdfUpload" accept=".pdf" />
+        <button onclick="uploadFile()">Upload PDF</button>
+        <div id="uploadStatus"></div>
+      </div>
+
+      <div class="chat-section">
+        <h2>Ask the Agent</h2>
+        <div id="chatHistory" class="chat-history"></div>
+        <div class="input-area">
+          <input
+            type="text"
+            id="userMessage"
+            placeholder="Ask about an SOP..."
+          />
+          <button onclick="sendMessage()">Send</button>
+        </div>
+      </div>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
