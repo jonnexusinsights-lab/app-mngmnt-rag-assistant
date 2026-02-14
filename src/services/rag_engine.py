@@ -104,9 +104,36 @@ class RAGService:
                 print(f"Warning: Failed to load/apply prompt for domain {domain}: {e}")
 
             response = query_engine.query(message)
-            return str(response)
+
+            # Extract sources
+            sources = []
+            if hasattr(response, 'source_nodes'):
+                for node in response.source_nodes:
+                    # node is NodeWithScore object
+                    # metadata is a dict
+                    meta = node.metadata
+                    file_name = meta.get('file_name', 'Unknown')
+                    page_label = meta.get('page_label', 'N/A')
+                    score = node.score
+
+                    # Avoid duplicates if multiple chunks from same page
+                    source_entry = {
+                        "file": file_name,
+                        "page": page_label,
+                        "score": score
+                    }
+                    if source_entry not in sources:
+                        sources.append(source_entry)
+
+            return {
+                "response": str(response),
+                "sources": sources
+            }
         except Exception as e:
-            return f"Error querying RAG: {str(e)}"
+            return {
+                "response": f"Error querying RAG: {str(e)}",
+                "sources": []
+            }
 
 # Singleton Instance
 rag_service = RAGService()

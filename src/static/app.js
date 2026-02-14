@@ -68,7 +68,16 @@ async function sendMessage() {
       body: JSON.stringify({ message: message, domain: "hr" }),
     });
     const data = await response.json();
-    botDiv.innerText = data.response;
+
+    let replyText = data.response;
+    if (data.sources && data.sources.length > 0) {
+      replyText += "\n\nSources:";
+      data.sources.forEach((source) => {
+        replyText += `\n• ${source.file} (Page ${source.page})`;
+      });
+    }
+
+    botDiv.innerText = replyText;
   } catch (error) {
     botDiv.innerText = "Error: " + error;
   }
