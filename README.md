@@ -2,6 +2,8 @@
 
 A local, Agentic RAG system for managing Application SOPs, built with the ACE Framework.
 
+> **Developer Setup**: For detailed configuration and initialization steps, see [Developer Configuration Quickstart](dev_configuration_quickstart.md).
+
 ## Features
 
 - **Local RAG**: Uses `Ollama` (Llama 3) and HuggingFace Embeddings (`BAAI/bge-m3`).
