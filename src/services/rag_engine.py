@@ -4,8 +4,46 @@ from llama_index.vector_stores.lancedb import LanceDBVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.ollama import Ollama
 from llama_index.core import Settings as LlamaSettings
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
+from llama_index.core.schema import NodeWithScore, QueryBundle
+from sentence_transformers import CrossEncoder
+from pydantic import Field, PrivateAttr
 from src.core.config import settings
 from src.core.prompts import prompt_manager
+
+class CustomReranker(BaseNodePostprocessor):
+    """
+    Custom Reranker using sentence-transformers CrossEncoder.
+    Avoids need for separate llama-index integration package.
+    """
+    top_n: int = Field(default=3)
+    _model: CrossEncoder = PrivateAttr()
+
+    def __init__(self, model_name: str, top_n: int = 3):
+        super().__init__(top_n=top_n)
+        self._model = CrossEncoder(model_name)
+
+    def _postprocess_nodes(self, nodes: list[NodeWithScore], query_bundle: QueryBundle | None = None) -> list[NodeWithScore]:
+        if not nodes:
+            return []
+
+        query_str = query_bundle.query_str if query_bundle else ""
+
+        # Prepare pairs for Cross-Encoder
+        # (query, document_text)
+        pairs = [[query_str, node.node.get_content()] for node in nodes]
+
+        # Get scores
+        scores = self._model.predict(pairs)
+
+        # Update scores and sort
+        for i, node in enumerate(nodes):
+            node.score = float(scores[i])
+
+        # Sort by score descending
+        nodes.sort(key=lambda x: x.score, reverse=True)
+
+        return nodes[:self.top_n]
 
 class RAGService:
     def __init__(self):
@@ -29,6 +67,17 @@ class RAGService:
         )
         self.storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
 
+        # Reranker (Cross-Encoder)
+        # Use a lightweight but effective model
+        self.reranker = CustomReranker(
+            model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",
+            top_n=3 # Rerank top-k (5) -> top-n (3)
+        )
+
+        # Chat Engine State
+        self.chat_engine = None
+        self.current_domain = None
+
     def ingest_document(self, file_path: str):
         """
         Ingest a document into the vector store (Append mode).
@@ -44,79 +93,197 @@ class RAGService:
                     index.insert(doc)
                 print(f"Appended {len(documents)} documents to existing index.")
             except Exception as e:
-                print(f"Index not found or load failed ({e}), creating new index.")
-                # Create Index (ingests into LanceDB)
-                index = VectorStoreIndex.from_documents(
-                    documents,
-                    storage_context=self.storage_context
-                )
+                # Check for specific LanceDB schema mismatch error
+                error_msg = str(e).lower()
+                if "schema" in error_msg and "not found" in error_msg:
+                    print("Schema mismatch detected. Resetting table to strictly enforce new schema (development mode behavior).")
+
+                    # Drop the table to allow recreation
+                    import lancedb
+                    import time
+                    db = lancedb.connect(settings.LANCEDB_URI)
+                    if settings.TABLE_NAME in db.table_names():
+                        try:
+                            db.drop_table(settings.TABLE_NAME)
+                            print(f"Dropped table '{settings.TABLE_NAME}'.")
+                        except Exception as drop_err:
+                            print(f"Error dropping table: {drop_err}")
+
+                    # Wait briefly for FS release
+                    time.sleep(1.0)
+
+                    # CRITICAL: Re-initialize the vector/storage context to clear stale schema caches
+                    self.vector_store = LanceDBVectorStore(
+                        uri=settings.LANCEDB_URI,
+                        table_name=settings.TABLE_NAME
+                    )
+                    self.storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
+
+                    # Re-create Index
+                    # LanceDBVectorStore should now create a new table with inferred schema
+                    index = VectorStoreIndex.from_documents(
+                        documents,
+                        storage_context=self.storage_context
+                    )
+
+                    # Force FTS re-creation since we dropped the table
+                    self._ensure_fts_index()
+
+                    # Re-create Index
+                    index = VectorStoreIndex.from_documents(
+                        documents,
+                        storage_context=self.storage_context
+                    )
+                else:
+                    print(f"Index not found or load failed ({e}), creating new index.")
+                    # Create Index (ingests into LanceDB)
+                    index = VectorStoreIndex.from_documents(
+                        documents,
+                        storage_context=self.storage_context
+                    )
+
+            # Reset chat engine to force reload of index with new data
+            self.chat_engine = None
 
             return {"status": "success", "chunks": len(documents)}
         except Exception as e:
             print(f"Ingestion Error: {e}")
             return {"status": "error", "message": str(e)}
 
-    def query(self, message: str, domain: str = "hr"):
+    def _ensure_fts_index(self):
         """
-        Query the RAG engine using the Agentic Loop.
+        Ensure Full Text Search (FTS) index exists for Hybrid Search.
+        """
+        try:
+            import lancedb
+            db = lancedb.connect(settings.LANCEDB_URI)
+            if settings.TABLE_NAME in db.table_names():
+                tbl = db.open_table(settings.TABLE_NAME)
+                try:
+                    # Create FTS index on the 'text' field (LlamaIndex default content field)
+                    # replace=False means it won't rebuild if exists (LanceDB handles this)
+                    # Note: FTS creation might fail if table is empty
+                    if len(tbl) > 0:
+                        tbl.create_fts_index("text", replace=False)
+                        print("FTS index verified/created.")
+                except Exception as e:
+                    print(f"Warning: Could not create FTS index (Table might be empty or locked): {e}")
+        except Exception as e:
+            print(f"Error checking FTS index: {e}")
+
+    def _initialize_chat_engine(self, domain: str):
+        """
+        Initialize the ContextChatEngine with specific domain prompts.
         """
         try:
             # Load index from storage
             index = VectorStoreIndex.from_vector_store(vector_store=self.vector_store)
 
-            # Configure Retriever
-            retriever = index.as_retriever(similarity_top_k=5)
+            # Ensure FTS availability for Hybrid Search
+            self._ensure_fts_index()
 
-            # Configure Query Engine
-            # Use RetrieverQueryEngine for custom retriever + LLM
-            from llama_index.core.query_engine import RetrieverQueryEngine
-            from llama_index.core import get_response_synthesizer
-
-            # Configure Response Synthesizer to use Ollama
-            response_synthesizer = get_response_synthesizer(
-                llm=self.llm,
-                streaming=False
-            )
-
-            query_engine = RetrieverQueryEngine(
-                retriever=retriever,
-                response_synthesizer=response_synthesizer
-            )
-
-            # Get Prompt Template
+            # Determine system prompt based on domain
+            system_prompt = "You are a helpful AI assistant."
             try:
-                # Load the appropriate prompt for the domain
-                # Default validation to ensure we fallback if needed
                 if domain not in ["hr", "tech"]:
-                    print(f"Warning: Unknown domain {domain}, defaulting to HR.")
                     domain = "hr"
 
-                prompt_template_str = prompt_manager.load_prompt(domain, "manager_sop")
+                # We simply use the 'template' from yaml as the system prompt
+                # (adjusting slightly for ChatEngine context calls)
+                prompt_content = prompt_manager.load_prompt(domain, "manager_sop")
 
-                # Update Query Engine Prompts
-                # LlamaIndex expects specific keys for prompt templates
-                from llama_index.core import PromptTemplate
-                new_summary_tmpl = PromptTemplate(prompt_template_str)
-                query_engine.update_prompts(
-                    {"response_synthesizer:text_qa_template": new_summary_tmpl}
-                )
+                # Extract the persona part or use the whole thing as system prompt
+                # For ContextChatEngine, we can pass system_prompt which frames the bot
+                system_prompt = prompt_content
             except Exception as e:
-                print(f"Warning: Failed to load/apply prompt for domain {domain}: {e}")
+                print(f"Warning: Failed to load prompt: {e}")
 
-            response = query_engine.query(message)
+            # Initialize Chat Engine (Context Mode) with Hybrid Search
+            # We construct it manually to pass retriever args
+
+            # Hybrid Retriever: combines Vector Search + Keyword Search (FTS)
+            retriever = index.as_retriever(
+                similarity_top_k=10, # Fetch more candidates (10) for reranking
+                vector_store_query_mode="hybrid", # Enable Hybrid in LanceDB
+                alpha=0.6 # Weight for Semantic (0.6) vs Keyword (0.4)
+            )
+
+            from llama_index.core.chat_engine import ContextChatEngine
+            self.chat_engine = ContextChatEngine.from_defaults(
+                retriever=retriever,
+                node_postprocessors=[self.reranker], # Apply Reranking
+                llm=self.llm,
+                system_prompt=system_prompt
+            )
+            self.current_domain = domain
+            print(f"Chat Engine initialized for domain: {domain} (Hybrid Search + Reranking Enabled)")
+
+        except Exception as e:
+            print(f"Error initializing chat engine: {e}")
+            raise e
+
+    def rewrite_query(self, query: str) -> str:
+        """
+        Rewrite the user query to better match document content (Query Transformation).
+        """
+        prompt = (
+            f"Please rewrite the following query to improve its clarity and matching potential "
+            f"for a retrieval system containing Standard Operating Procedures (SOPs). "
+            f"Expand any common acronyms if possible. "
+            f"Return ONLY the rewritten query, nothing else.\n\n"
+            f"Original Query: {query}\n"
+            f"Rewritten Query:"
+        )
+        try:
+            response = self.llm.complete(prompt)
+            rewritten = response.text.strip().replace('"', '')
+            print(f"Query Transformation: '{query}' -> '{rewritten}'")
+            return rewritten
+        except Exception as e:
+            print(f"Query rewrite failed: {e}")
+            return query
+
+    def query(self, message: str, domain: str = "hr"):
+        """
+        Chat with the RAG engine (Stateful).
+        """
+        try:
+            # Initialize or Re-initialize if domain changed or not set
+            if self.chat_engine is None or self.current_domain != domain:
+                self._initialize_chat_engine(domain)
+
+            if not self.chat_engine:
+                return {"response": "System is not ready (Index not found?). Upload a document first.", "sources": []}
+
+            # 1. Query Transformation
+            # usage: We can optionally rewrite. For ChatEngine context mode,
+            # modifying the input message might confuse the history,
+            # BUT efficient RAG often transforms the query *for retrieval* while keeping the original for chat.
+            # LlamaIndex ContextChatEngine doesn't easily separate "retrieval query" vs "chat message" without custom logic.
+            # For this MVP, we will simpler pass the rewritten query as the message,
+            # explaining to the user if needed, OR just use it silently.
+            # Let's try silent rewriting for better accuracy.
+
+            # Simple heuristic: Only rewrite if query is short or looks like a keyword search
+            if len(message.split()) < 10:
+                search_query = self.rewrite_query(message)
+            else:
+                search_query = message
+
+            # Query (Chat)
+            # We pass the POTENTIALLY rewritten query.
+            # Note: This means the chat history will record the REWRITTEN query.
+            response = self.chat_engine.chat(search_query)
 
             # Extract sources
             sources = []
             if hasattr(response, 'source_nodes'):
                 for node in response.source_nodes:
-                    # node is NodeWithScore object
-                    # metadata is a dict
                     meta = node.metadata
                     file_name = meta.get('file_name', 'Unknown')
                     page_label = meta.get('page_label', 'N/A')
                     score = node.score
 
-                    # Avoid duplicates if multiple chunks from same page
                     source_entry = {
                         "file": file_name,
                         "page": page_label,
@@ -134,6 +301,84 @@ class RAGService:
                 "response": f"Error querying RAG: {str(e)}",
                 "sources": []
             }
+
+    def reset(self):
+        """
+        Reset the chat history.
+        """
+        if self.chat_engine:
+            self.chat_engine.reset()
+            return True
+        return False
+
+    def list_documents(self):
+        """
+        List all ingested documents by querying LanceDB metadata.
+        """
+        try:
+            import lancedb
+            db = lancedb.connect(settings.LANCEDB_URI)
+            if settings.TABLE_NAME not in db.table_names():
+                return []
+
+            tbl = db.open_table(settings.TABLE_NAME)
+
+            # Fetch all rows, but only metadata column.
+            # Note: For large datasets this is inefficient (O(N)), but fine for MVP.
+            # LanceDB doesn't support 'DISTINCT' queries directly yet via simple API.
+            try:
+                # Try pandas if available for ease
+                # Some versions of lancedb.to_pandas() do not accept 'columns' or 'flatten' args
+                df = tbl.to_pandas()
+                files = set()
+
+                # Check if 'metadata' column exists
+                if "metadata" in df.columns:
+                    for _, row in df.iterrows():
+                        meta = row.get("metadata", {})
+                        # Metadata might be a dict or a string depending on ingestion
+                        if isinstance(meta, dict) and "file_name" in meta:
+                            files.add(meta["file_name"])
+                return sorted(list(files))
+            except ImportError:
+                # Fallback to Arrow if pandas is missing
+                arrow_tbl = tbl.to_arrow()
+                files = set()
+                if "metadata" in arrow_tbl.column_names:
+                    metadata_col = arrow_tbl["metadata"]
+                    for i in range(len(metadata_col)):
+                        meta = metadata_col[i].as_py()
+                        if isinstance(meta, dict) and "file_name" in meta:
+                            files.add(meta["file_name"])
+                return sorted(list(files))
+
+        except Exception as e:
+            print(f"Error listing documents: {e}")
+            return []
+
+    def delete_document(self, filename: str):
+        """
+        Delete a document from the vector store by filename.
+        """
+        try:
+            import lancedb
+            db = lancedb.connect(settings.LANCEDB_URI)
+            if settings.TABLE_NAME not in db.table_names():
+                return False
+
+            tbl = db.open_table(settings.TABLE_NAME)
+
+            # Delete syntax: table.delete("metadata.file_name = 'value'")
+            # Escape filename just in case
+            safe_filename = filename.replace("'", "''")
+            tbl.delete(f"metadata.file_name = '{safe_filename}'")
+
+            # Reset chat engine to ensure no stale context
+            self.chat_engine = None
+            return True
+        except Exception as e:
+            print(f"Error deleting document: {e}")
+            return False
 
 # Singleton Instance
 rag_service = RAGService()

@@ -52,3 +52,20 @@ async def ingest_document(file: UploadFile = File(...)):
 async def chat(request: ChatRequest):
     # response is now a dict with 'response' and 'sources'
     return rag_service.query(request.message, request.domain)
+
+@app.post("/reset")
+async def reset_chat():
+    success = rag_service.reset()
+    return {"status": "success" if success else "error", "message": "Chat history cleared"}
+
+@app.get("/documents")
+async def list_docs():
+    docs = rag_service.list_documents()
+    return {"documents": docs}
+
+@app.delete("/documents/{filename}")
+async def delete_doc(filename: str):
+    success = rag_service.delete_document(filename)
+    if not success:
+         raise HTTPException(status_code=500, detail="Failed to delete document")
+    return {"status": "success", "message": f"Deleted {filename}"}
