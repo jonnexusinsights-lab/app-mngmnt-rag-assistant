@@ -4,8 +4,46 @@ from llama_index.vector_stores.lancedb import LanceDBVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.ollama import Ollama
 from llama_index.core import Settings as LlamaSettings
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
+from llama_index.core.schema import NodeWithScore, QueryBundle
+from sentence_transformers import CrossEncoder
+from pydantic import Field, PrivateAttr
 from src.core.config import settings
 from src.core.prompts import prompt_manager
+
+class CustomReranker(BaseNodePostprocessor):
+    """
+    Custom Reranker using sentence-transformers CrossEncoder.
+    Avoids need for separate llama-index integration package.
+    """
+    top_n: int = Field(default=3)
+    _model: CrossEncoder = PrivateAttr()
+
+    def __init__(self, model_name: str, top_n: int = 3):
+        super().__init__(top_n=top_n)
+        self._model = CrossEncoder(model_name)
+
+    def _postprocess_nodes(self, nodes: list[NodeWithScore], query_bundle: QueryBundle | None = None) -> list[NodeWithScore]:
+        if not nodes:
+            return []
+
+        query_str = query_bundle.query_str if query_bundle else ""
+
+        # Prepare pairs for Cross-Encoder
+        # (query, document_text)
+        pairs = [[query_str, node.node.get_content()] for node in nodes]
+
+        # Get scores
+        scores = self._model.predict(pairs)
+
+        # Update scores and sort
+        for i, node in enumerate(nodes):
+            node.score = float(scores[i])
+
+        # Sort by score descending
+        nodes.sort(key=lambda x: x.score, reverse=True)
+
+        return nodes[:self.top_n]
 
 class RAGService:
     def __init__(self):
@@ -28,6 +66,13 @@ class RAGService:
             table_name=settings.TABLE_NAME
         )
         self.storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
+
+        # Reranker (Cross-Encoder)
+        # Use a lightweight but effective model
+        self.reranker = CustomReranker(
+            model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",
+            top_n=3 # Rerank top-k (5) -> top-n (3)
+        )
 
         # Chat Engine State
         self.chat_engine = None
@@ -158,7 +203,7 @@ class RAGService:
 
             # Hybrid Retriever: combines Vector Search + Keyword Search (FTS)
             retriever = index.as_retriever(
-                similarity_top_k=5,
+                similarity_top_k=10, # Fetch more candidates (10) for reranking
                 vector_store_query_mode="hybrid", # Enable Hybrid in LanceDB
                 alpha=0.6 # Weight for Semantic (0.6) vs Keyword (0.4)
             )
@@ -166,15 +211,37 @@ class RAGService:
             from llama_index.core.chat_engine import ContextChatEngine
             self.chat_engine = ContextChatEngine.from_defaults(
                 retriever=retriever,
+                node_postprocessors=[self.reranker], # Apply Reranking
                 llm=self.llm,
                 system_prompt=system_prompt
             )
             self.current_domain = domain
-            print(f"Chat Engine initialized for domain: {domain} (Hybrid Search Enabled)")
+            print(f"Chat Engine initialized for domain: {domain} (Hybrid Search + Reranking Enabled)")
 
         except Exception as e:
             print(f"Error initializing chat engine: {e}")
             raise e
+
+    def rewrite_query(self, query: str) -> str:
+        """
+        Rewrite the user query to better match document content (Query Transformation).
+        """
+        prompt = (
+            f"Please rewrite the following query to improve its clarity and matching potential "
+            f"for a retrieval system containing Standard Operating Procedures (SOPs). "
+            f"Expand any common acronyms if possible. "
+            f"Return ONLY the rewritten query, nothing else.\n\n"
+            f"Original Query: {query}\n"
+            f"Rewritten Query:"
+        )
+        try:
+            response = self.llm.complete(prompt)
+            rewritten = response.text.strip().replace('"', '')
+            print(f"Query Transformation: '{query}' -> '{rewritten}'")
+            return rewritten
+        except Exception as e:
+            print(f"Query rewrite failed: {e}")
+            return query
 
     def query(self, message: str, domain: str = "hr"):
         """
@@ -188,8 +255,25 @@ class RAGService:
             if not self.chat_engine:
                 return {"response": "System is not ready (Index not found?). Upload a document first.", "sources": []}
 
+            # 1. Query Transformation
+            # usage: We can optionally rewrite. For ChatEngine context mode,
+            # modifying the input message might confuse the history,
+            # BUT efficient RAG often transforms the query *for retrieval* while keeping the original for chat.
+            # LlamaIndex ContextChatEngine doesn't easily separate "retrieval query" vs "chat message" without custom logic.
+            # For this MVP, we will simpler pass the rewritten query as the message,
+            # explaining to the user if needed, OR just use it silently.
+            # Let's try silent rewriting for better accuracy.
+
+            # Simple heuristic: Only rewrite if query is short or looks like a keyword search
+            if len(message.split()) < 10:
+                search_query = self.rewrite_query(message)
+            else:
+                search_query = message
+
             # Query (Chat)
-            response = self.chat_engine.chat(message)
+            # We pass the POTENTIALLY rewritten query.
+            # Note: This means the chat history will record the REWRITTEN query.
+            response = self.chat_engine.chat(search_query)
 
             # Extract sources
             sources = []
