@@ -24,9 +24,13 @@
           <input
             type="text"
             id="userMessage"
-            placeholder="Ask about an SOP..."
+            placeholder="Ask a question..."
+            onkeypress="if (event.key === 'Enter') sendMessage();"
           />
           <button onclick="sendMessage()">Send</button>
+          <button onclick="clearChat()" style="background-color: #dc3545">
+            Clear
+          </button>
         </div>
       </div>
     </div>

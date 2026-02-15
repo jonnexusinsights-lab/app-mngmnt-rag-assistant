@@ -52,3 +52,8 @@ async def ingest_document(file: UploadFile = File(...)):
 async def chat(request: ChatRequest):
     # response is now a dict with 'response' and 'sources'
     return rag_service.query(request.message, request.domain)
+
+@app.post("/reset")
+async def reset_chat():
+    success = rag_service.reset()
+    return {"status": "success" if success else "error", "message": "Chat history cleared"}

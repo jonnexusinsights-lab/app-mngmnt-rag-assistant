@@ -85,3 +85,26 @@ async function sendMessage() {
   // Auto-scroll to bottom
   history.scrollTop = history.scrollHeight;
 }
+
+async function clearChat() {
+  try {
+    const response = await fetch("/reset", { method: "POST" });
+    const result = await response.json();
+
+    if (result.status === "success") {
+      const history = document.getElementById("chatHistory");
+      history.innerHTML = "";
+
+      // Add system welcome message
+      const welcome = document.createElement("div");
+      welcome.className = "message bot";
+      welcome.innerText =
+        "Chat history cleared. How can I help you regarding the SOPs?";
+      history.appendChild(welcome);
+    } else {
+      alert("Failed to clear chat: " + result.message);
+    }
+  } catch (error) {
+    alert("Error: " + error);
+  }
+}

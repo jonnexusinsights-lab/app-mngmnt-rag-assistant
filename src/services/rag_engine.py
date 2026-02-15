@@ -29,6 +29,10 @@ class RAGService:
         )
         self.storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
 
+        # Chat Engine State
+        self.chat_engine = None
+        self.current_domain = None
+
     def ingest_document(self, file_path: str):
         """
         Ingest a document into the vector store (Append mode).
@@ -51,72 +55,77 @@ class RAGService:
                     storage_context=self.storage_context
                 )
 
+            # Reset chat engine to force reload of index with new data
+            self.chat_engine = None
+
             return {"status": "success", "chunks": len(documents)}
         except Exception as e:
             print(f"Ingestion Error: {e}")
             return {"status": "error", "message": str(e)}
 
-    def query(self, message: str, domain: str = "hr"):
+    def _initialize_chat_engine(self, domain: str):
         """
-        Query the RAG engine using the Agentic Loop.
+        Initialize the ContextChatEngine with specific domain prompts.
         """
         try:
             # Load index from storage
             index = VectorStoreIndex.from_vector_store(vector_store=self.vector_store)
 
-            # Configure Retriever
-            retriever = index.as_retriever(similarity_top_k=5)
-
-            # Configure Query Engine
-            # Use RetrieverQueryEngine for custom retriever + LLM
-            from llama_index.core.query_engine import RetrieverQueryEngine
-            from llama_index.core import get_response_synthesizer
-
-            # Configure Response Synthesizer to use Ollama
-            response_synthesizer = get_response_synthesizer(
-                llm=self.llm,
-                streaming=False
-            )
-
-            query_engine = RetrieverQueryEngine(
-                retriever=retriever,
-                response_synthesizer=response_synthesizer
-            )
-
-            # Get Prompt Template
+            # Determine system prompt based on domain
+            system_prompt = "You are a helpful AI assistant."
             try:
-                # Load the appropriate prompt for the domain
-                # Default validation to ensure we fallback if needed
                 if domain not in ["hr", "tech"]:
-                    print(f"Warning: Unknown domain {domain}, defaulting to HR.")
                     domain = "hr"
 
-                prompt_template_str = prompt_manager.load_prompt(domain, "manager_sop")
+                # We simply use the 'template' from yaml as the system prompt
+                # (adjusting slightly for ChatEngine context calls)
+                prompt_content = prompt_manager.load_prompt(domain, "manager_sop")
 
-                # Update Query Engine Prompts
-                # LlamaIndex expects specific keys for prompt templates
-                from llama_index.core import PromptTemplate
-                new_summary_tmpl = PromptTemplate(prompt_template_str)
-                query_engine.update_prompts(
-                    {"response_synthesizer:text_qa_template": new_summary_tmpl}
-                )
+                # Extract the persona part or use the whole thing as system prompt
+                # For ContextChatEngine, we can pass system_prompt which frames the bot
+                system_prompt = prompt_content
             except Exception as e:
-                print(f"Warning: Failed to load/apply prompt for domain {domain}: {e}")
+                print(f"Warning: Failed to load prompt: {e}")
 
-            response = query_engine.query(message)
+            # Initialize Chat Engine (Context Mode)
+            # chat_mode='context' retrieves context from index and puts it in system message
+            self.chat_engine = index.as_chat_engine(
+                chat_mode="context",
+                llm=self.llm,
+                system_prompt=system_prompt,
+                similarity_top_k=5
+            )
+            self.current_domain = domain
+            print(f"Chat Engine initialized for domain: {domain}")
+
+        except Exception as e:
+            print(f"Error initializing chat engine: {e}")
+            raise e
+
+    def query(self, message: str, domain: str = "hr"):
+        """
+        Chat with the RAG engine (Stateful).
+        """
+        try:
+            # Initialize or Re-initialize if domain changed or not set
+            if self.chat_engine is None or self.current_domain != domain:
+                self._initialize_chat_engine(domain)
+
+            if not self.chat_engine:
+                return {"response": "System is not ready (Index not found?). Upload a document first.", "sources": []}
+
+            # Query (Chat)
+            response = self.chat_engine.chat(message)
 
             # Extract sources
             sources = []
             if hasattr(response, 'source_nodes'):
                 for node in response.source_nodes:
-                    # node is NodeWithScore object
-                    # metadata is a dict
                     meta = node.metadata
                     file_name = meta.get('file_name', 'Unknown')
                     page_label = meta.get('page_label', 'N/A')
                     score = node.score
 
-                    # Avoid duplicates if multiple chunks from same page
                     source_entry = {
                         "file": file_name,
                         "page": page_label,
@@ -134,6 +143,15 @@ class RAGService:
                 "response": f"Error querying RAG: {str(e)}",
                 "sources": []
             }
+
+    def reset(self):
+        """
+        Reset the chat history.
+        """
+        if self.chat_engine:
+            self.chat_engine.reset()
+            return True
+        return False
 
 # Singleton Instance
 rag_service = RAGService()
