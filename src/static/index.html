@@ -4,49 +4,114 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SOP Agent</title>
+    <!-- Google Fonts for Modern Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Marked.js for Markdown Rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
-    <div class="container">
-      <h1>SOP Agent for Managers</h1>
+    <div class="app-container">
+      <!-- Sidebar / Config Panel -->
+      <aside class="sidebar">
+        <div class="brand">
+          <h2>SOP Agent</h2>
+          <p class="subtitle">AI Assistant</p>
+        </div>
 
-      <div class="upload-section">
-        <h2>Ingest Documents</h2>
-        <input type="file" id="pdfUpload" accept=".pdf" />
-        <button onclick="uploadFile()">Upload PDF</button>
-        <div id="uploadStatus"></div>
-      </div>
+        <div class="control-group">
+          <label for="domainSelector">Context Domain</label>
+          <div class="select-wrapper">
+            <select id="domainSelector">
+              <option value="hr">Management</option>
+              <option value="tech">Technical Support</option>
+            </select>
+          </div>
+        </div>
 
-      <div class="chat-section">
-        <h2>Ask the Agent</h2>
-        <div id="chatHistory" class="chat-history"></div>
+        <div class="control-group">
+          <label>Document Ingestion</label>
+          <div class="upload-zone">
+            <input
+              type="file"
+              id="pdfUpload"
+              accept=".pdf"
+              class="file-input"
+            />
+            <button onclick="uploadFile()" class="btn btn-primary full-width">
+              <span class="icon">Start Upload</span>
+            </button>
+            <div id="uploadStatus" class="status-text"></div>
+          </div>
+        </div>
+
+        <div class="control-group expanded">
+          <div class="header-row">
+            <label>Library</label>
+            <button
+              onclick="loadDocuments()"
+              class="btn btn-sm btn-icon"
+              title="Refresh"
+            >
+              ↻
+            </button>
+          </div>
+          <div id="docList" class="doc-list-container">
+            <p class="empty-state">Loading...</p>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Chat Area -->
+      <main class="chat-interface">
+        <header class="chat-header">
+          <div class="header-info">
+            <h3 id="currentDomainTitle">Management Support</h3>
+            <span class="status-indicator online">Online</span>
+          </div>
+          <div class="header-actions">
+            <button onclick="clearChat()" class="btn btn-danger btn-sm">
+              Clear History
+            </button>
+          </div>
+        </header>
+
+        <div id="chatHistory" class="chat-history">
+          <!-- Messages will be appended here -->
+          <div class="message bot-message">
+            <div class="message-content">
+              <p>Hello! I am your SOP Assistant. How can I help you today?</p>
+            </div>
+          </div>
+        </div>
+
         <div class="input-area">
-          <input
-            type="text"
-            id="userMessage"
-            placeholder="Ask a question..."
-            onkeypress="if (event.key === 'Enter') sendMessage();"
-          />
-          <button onclick="sendMessage()">Send</button>
-          <button onclick="clearChat()" style="background-color: #dc3545">
-            Clear
-          </button>
+          <div class="input-wrapper">
+            <input
+              type="text"
+              id="userMessage"
+              placeholder="Type your question here..."
+              autocomplete="off"
+              onkeypress="if (event.key === 'Enter') sendMessage();"
+            />
+            <button onclick="sendMessage()" class="btn btn-send">
+              <svg
+                viewBox="0 0 24 24"
+                width="24"
+                height="24"
+                fill="currentColor"
+              >
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
-
-      <!-- Document Library -->
-      <div class="card">
-        <h2>Document Library</h2>
-        <button
-          onclick="loadDocuments()"
-          style="margin-bottom: 10px; background-color: #17a2b8"
-        >
-          Refresh List
-        </button>
-        <div id="docList" class="doc-list">
-          <p>Loading documents...</p>
-        </div>
-      </div>
+      </main>
     </div>
     <script src="/static/app.js"></script>
   </body>
