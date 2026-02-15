@@ -108,3 +108,54 @@ async function clearChat() {
     alert("Error: " + error);
   }
 }
+
+async function loadDocuments() {
+  const listDiv = document.getElementById("docList");
+  try {
+    listDiv.innerHTML = "<p>Loading...</p>";
+    const response = await fetch("/documents");
+    const result = await response.json();
+
+    if (result.documents && result.documents.length > 0) {
+      let html = "<ul>";
+      result.documents.forEach((doc) => {
+        html += `
+                <li style="margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center;">
+                    <span>📄 ${doc}</span>
+                    <button onclick="deleteDocument('${doc}')" style="background-color: #dc3545; padding: 5px 10px; font-size: 0.8rem;">Delete</button>
+                </li>`;
+      });
+      html += "</ul>";
+      listDiv.innerHTML = html;
+    } else {
+      listDiv.innerHTML = "<p>No documents found.</p>";
+    }
+  } catch (error) {
+    listDiv.innerHTML = '<p style="color:red">Error loading documents.</p>';
+  }
+}
+
+async function deleteDocument(filename) {
+  if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
+
+  try {
+    const response = await fetch(`/documents/${encodeURIComponent(filename)}`, {
+      method: "DELETE",
+    });
+    const result = await response.json();
+
+    if (result.status === "success") {
+      alert("Document deleted!");
+      loadDocuments(); // Refresh list
+    } else {
+      alert("Failed to delete: " + result.detail);
+    }
+  } catch (error) {
+    alert("Error deleting: " + error);
+  }
+}
+
+// Load documents on page load
+document.addEventListener("DOMContentLoaded", () => {
+  loadDocuments();
+});

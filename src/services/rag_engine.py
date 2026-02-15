@@ -48,12 +48,29 @@ class RAGService:
                     index.insert(doc)
                 print(f"Appended {len(documents)} documents to existing index.")
             except Exception as e:
-                print(f"Index not found or load failed ({e}), creating new index.")
-                # Create Index (ingests into LanceDB)
-                index = VectorStoreIndex.from_documents(
-                    documents,
-                    storage_context=self.storage_context
-                )
+                # Check for specific LanceDB schema mismatch error
+                error_msg = str(e).lower()
+                if "schema" in error_msg and "not found" in error_msg:
+                    print("Schema mismatch detected. Resetting table to strictly enforce new schema (development mode behavior).")
+
+                    # Drop the table to allow recreation
+                    import lancedb
+                    db = lancedb.connect(settings.LANCEDB_URI)
+                    if settings.TABLE_NAME in db.table_names():
+                        db.drop_table(settings.TABLE_NAME)
+
+                    # Re-create Index
+                    index = VectorStoreIndex.from_documents(
+                        documents,
+                        storage_context=self.storage_context
+                    )
+                else:
+                    print(f"Index not found or load failed ({e}), creating new index.")
+                    # Create Index (ingests into LanceDB)
+                    index = VectorStoreIndex.from_documents(
+                        documents,
+                        storage_context=self.storage_context
+                    )
 
             # Reset chat engine to force reload of index with new data
             self.chat_engine = None
@@ -152,6 +169,75 @@ class RAGService:
             self.chat_engine.reset()
             return True
         return False
+
+    def list_documents(self):
+        """
+        List all ingested documents by querying LanceDB metadata.
+        """
+        try:
+            import lancedb
+            db = lancedb.connect(settings.LANCEDB_URI)
+            if settings.TABLE_NAME not in db.table_names():
+                return []
+
+            tbl = db.open_table(settings.TABLE_NAME)
+
+            # Fetch all rows, but only metadata column.
+            # Note: For large datasets this is inefficient (O(N)), but fine for MVP.
+            # LanceDB doesn't support 'DISTINCT' queries directly yet via simple API.
+            try:
+                # Try pandas if available for ease
+                # Some versions of lancedb.to_pandas() do not accept 'columns' or 'flatten' args
+                df = tbl.to_pandas()
+                files = set()
+
+                # Check if 'metadata' column exists
+                if "metadata" in df.columns:
+                    for _, row in df.iterrows():
+                        meta = row.get("metadata", {})
+                        # Metadata might be a dict or a string depending on ingestion
+                        if isinstance(meta, dict) and "file_name" in meta:
+                            files.add(meta["file_name"])
+                return sorted(list(files))
+            except ImportError:
+                # Fallback to Arrow if pandas is missing
+                arrow_tbl = tbl.to_arrow()
+                files = set()
+                if "metadata" in arrow_tbl.column_names:
+                    metadata_col = arrow_tbl["metadata"]
+                    for i in range(len(metadata_col)):
+                        meta = metadata_col[i].as_py()
+                        if isinstance(meta, dict) and "file_name" in meta:
+                            files.add(meta["file_name"])
+                return sorted(list(files))
+
+        except Exception as e:
+            print(f"Error listing documents: {e}")
+            return []
+
+    def delete_document(self, filename: str):
+        """
+        Delete a document from the vector store by filename.
+        """
+        try:
+            import lancedb
+            db = lancedb.connect(settings.LANCEDB_URI)
+            if settings.TABLE_NAME not in db.table_names():
+                return False
+
+            tbl = db.open_table(settings.TABLE_NAME)
+
+            # Delete syntax: table.delete("metadata.file_name = 'value'")
+            # Escape filename just in case
+            safe_filename = filename.replace("'", "''")
+            tbl.delete(f"metadata.file_name = '{safe_filename}'")
+
+            # Reset chat engine to ensure no stale context
+            self.chat_engine = None
+            return True
+        except Exception as e:
+            print(f"Error deleting document: {e}")
+            return False
 
 # Singleton Instance
 rag_service = RAGService()
