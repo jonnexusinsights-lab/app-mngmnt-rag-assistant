@@ -61,9 +61,12 @@ class RAGService:
             raise e
 
         # Initialize LanceDB
+        # mode="append" ensures we don't wipe the table on initialization/connection
+        # However, if table doesn't exist, it should create it.
         self.vector_store = LanceDBVectorStore(
             uri=settings.LANCEDB_URI,
-            table_name=settings.TABLE_NAME
+            table_name=settings.TABLE_NAME,
+            mode="append"
         )
         self.storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
 
@@ -78,69 +81,83 @@ class RAGService:
         self.chat_engine = None
         self.current_domain = None
 
-    def ingest_document(self, file_path: str):
+    def ingest_documents(self, file_paths: list[str]):
         """
-        Ingest a document into the vector store (Append mode).
+        Ingest a list of documents into the vector store (Append mode).
+        Standardizes metadata to prevent schema mismatches and data loss.
         """
         try:
-            documents = SimpleDirectoryReader(input_files=[file_path]).load_data()
+            # 1. Load Data
+            documents = SimpleDirectoryReader(input_files=file_paths).load_data()
 
-            # Try to load existing index and insert
+            # 2. Standardize Metadata (Crucial to prevent schema errors)
+            # LanceDB is strict about schema. If a new doc has numeric 'page_label'
+            # and old docs had string, or missing keys, it might fail.
+            # 2. Standardize Metadata (Crucial to prevent schema errors)
+            # LanceDB is strict. Table only has 'file_name', 'page_label'.
+            # SimpleDirectoryReader adds 'file_path', 'creation_date', etc. which causes mismatch.
+            allowed_keys = ["file_name", "page_label"]
+            for doc in documents:
+                # 1. Capture vital info before filtering
+                f_name = doc.metadata.get("file_name") or os.path.basename(doc.metadata.get("file_path", file_paths[0]))
+                p_label = doc.metadata.get("page_label", "1")
+
+                # 2. Replace metadata with ONLY allowed keys
+                doc.metadata = {
+                    "file_name": str(f_name),
+                    "page_label": str(p_label)
+                }
+
+            # 3. Try to load existing index and insert
             try:
                 # Load index from storage
                 index = VectorStoreIndex.from_vector_store(vector_store=self.vector_store)
-                for doc in documents:
-                    index.insert(doc)
+
+                # Check if table exists (via simple query or checking tables) to avoid 'Table not found' on insert
+                # LanceDBVectorStore handles this usually, but let's be safe.
+
+                index.insert_nodes(documents) # Insert as nodes/documents
+
+                # Debug: Check table size
+                import lancedb
+                _db = lancedb.connect(settings.LANCEDB_URI)
+                if settings.TABLE_NAME in _db.table_names():
+                    _tbl = _db.open_table(settings.TABLE_NAME)
+                    print(f"Debug: Table size after insert: {len(_tbl)}")
+
                 print(f"Appended {len(documents)} documents to existing index.")
             except Exception as e:
-                # Check for specific LanceDB schema mismatch error
-                error_msg = str(e).lower()
-                if "schema" in error_msg and "not found" in error_msg:
-                    print("Schema mismatch detected. Resetting table to strictly enforce new schema (development mode behavior).")
+                # 4. Handle Case: Index/Table doesn't exist yet OR Schema Mismatch (Recoverable)
+                print(f"Insert failed/Index not found ({e}). Attempting to create new index (Merging schema if possible)...")
 
-                    # Drop the table to allow recreation
-                    import lancedb
-                    import time
-                    db = lancedb.connect(settings.LANCEDB_URI)
-                    if settings.TABLE_NAME in db.table_names():
-                        try:
-                            db.drop_table(settings.TABLE_NAME)
-                            print(f"Dropped table '{settings.TABLE_NAME}'.")
-                        except Exception as drop_err:
-                            print(f"Error dropping table: {drop_err}")
+                # If it's a schema mismatch, LanceDB might throw.
+                # In a production "Append" scenario, we shouldn't drop the table unless explicitly requested.
+                # But for this MVP, if the table exists and is incompatible, we previously dropped it.
+                # To FIX DATA LOSS: We will try to merge or ignore, but if we MUST drop, we should warn.
+                # For now, let's assume 'Standardized Metadata' fixes 90% of issues.
+                # If it fails, we fall back to creating from scratch ONLY if table is missing.
 
-                    # Wait briefly for FS release
-                    time.sleep(1.0)
-
-                    # CRITICAL: Re-initialize the vector/storage context to clear stale schema caches
-                    self.vector_store = LanceDBVectorStore(
-                        uri=settings.LANCEDB_URI,
-                        table_name=settings.TABLE_NAME
-                    )
-                    self.storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
-
-                    # Re-create Index
-                    # LanceDBVectorStore should now create a new table with inferred schema
-                    index = VectorStoreIndex.from_documents(
-                        documents,
-                        storage_context=self.storage_context
-                    )
-
-                    # Force FTS re-creation since we dropped the table
-                    self._ensure_fts_index()
-
-                    # Re-create Index
-                    index = VectorStoreIndex.from_documents(
+                import lancedb
+                db = lancedb.connect(settings.LANCEDB_URI)
+                if settings.TABLE_NAME not in db.table_names():
+                     # Create fresh
+                     index = VectorStoreIndex.from_documents(
                         documents,
                         storage_context=self.storage_context
                     )
                 else:
-                    print(f"Index not found or load failed ({e}), creating new index.")
-                    # Create Index (ingests into LanceDB)
-                    index = VectorStoreIndex.from_documents(
-                        documents,
-                        storage_context=self.storage_context
-                    )
+                    # Table exists but insert failed.
+                    # It could be a true schema conflict.
+                    # We will log error but NOT DROP TABLE automatically to preserve data.
+                    print("CRITICAL: Failed to append to existing table. Schema mismatch likely.")
+                    print("To fix: Standardize your document metadata or manually reset the DB if this is a fresh start.")
+                    # For MVP "Auto-fix" behavior (User requested "Context" capability implies adding to it, not replacing):
+                    # We re-raise to alert the user, rather than silently wiping data.
+                    # OR we could try to coerce schema.
+                    raise e
+
+            # Force FTS re-creation/verification
+            self._ensure_fts_index()
 
             # Reset chat engine to force reload of index with new data
             self.chat_engine = None
@@ -164,7 +181,8 @@ class RAGService:
                     # replace=False means it won't rebuild if exists (LanceDB handles this)
                     # Note: FTS creation might fail if table is empty
                     if len(tbl) > 0:
-                        tbl.create_fts_index("text", replace=False)
+                        # Use replace=True to rebuild the FTS index for new documents
+                        tbl.create_fts_index("text", replace=True)
                         print("FTS index verified/created.")
                 except Exception as e:
                     print(f"Warning: Could not create FTS index (Table might be empty or locked): {e}")

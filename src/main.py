@@ -25,28 +25,67 @@ async def health_check():
     return {"status": "healthy", "version": settings.APP_VERSION}
 
 @app.post("/ingest")
-async def ingest_document(file: UploadFile = File(...)):
-    # Save temp file
-    temp_dir = "temp_uploads"
+async def ingest_documents(files: list[UploadFile] = File(...)):
+    """
+    Ingest multiple documents into the RAG system.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    uploaded_count = 0
+    errors = []
+
+    # Create temporary directory if it doesn't exist
+    temp_dir = "temp_ingest"
     os.makedirs(temp_dir, exist_ok=True)
-    file_path = os.path.join(temp_dir, file.filename)
 
     try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        saved_paths = []
+        for file in files:
+            try:
+                # Sanitize filename
+                safe_filename = os.path.basename(file.filename)
+                file_location = os.path.join(temp_dir, safe_filename)
 
-        # Ingest
-        result = rag_service.ingest_document(file_path)
+                with open(file_location, "wb+") as file_object:
+                    file_object.write(await file.read())
+                saved_paths.append(file_location)
+            except Exception as e:
+                errors.append(f"Failed to save {file.filename}: {str(e)}")
 
-        # Cleanup
-        os.remove(file_path)
+        # Process the saved files
+        if saved_paths:
+            # Call the batch ingestion method
+            # Note: We need to ensure rag_engine has this method. It was added in previous steps.
+            result = rag_service.ingest_documents(saved_paths)
 
-        if result["status"] == "error":
-             raise HTTPException(status_code=500, detail=result["message"])
+            if result.get("status") == "success":
+                uploaded_count = result.get("chunks", 0) # API returns chunks count, or meaningful stats
+            else:
+                errors.append(f"Engine Ingestion Error: {result.get('message')}")
 
-        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Cleanup temp files
+        if 'saved_paths' in locals():
+            for path in saved_paths:
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except:
+                        pass
+        try:
+             if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+                 os.rmdir(temp_dir)
+        except:
+            pass
+
+    return {
+        "message": f"Processed batch.",
+        "errors": errors,
+        "total_files": len(files)
+    }
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
