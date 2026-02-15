@@ -55,9 +55,34 @@ class RAGService:
 
                     # Drop the table to allow recreation
                     import lancedb
+                    import time
                     db = lancedb.connect(settings.LANCEDB_URI)
                     if settings.TABLE_NAME in db.table_names():
-                        db.drop_table(settings.TABLE_NAME)
+                        try:
+                            db.drop_table(settings.TABLE_NAME)
+                            print(f"Dropped table '{settings.TABLE_NAME}'.")
+                        except Exception as drop_err:
+                            print(f"Error dropping table: {drop_err}")
+
+                    # Wait briefly for FS release
+                    time.sleep(1.0)
+
+                    # CRITICAL: Re-initialize the vector/storage context to clear stale schema caches
+                    self.vector_store = LanceDBVectorStore(
+                        uri=settings.LANCEDB_URI,
+                        table_name=settings.TABLE_NAME
+                    )
+                    self.storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
+
+                    # Re-create Index
+                    # LanceDBVectorStore should now create a new table with inferred schema
+                    index = VectorStoreIndex.from_documents(
+                        documents,
+                        storage_context=self.storage_context
+                    )
+
+                    # Force FTS re-creation since we dropped the table
+                    self._ensure_fts_index()
 
                     # Re-create Index
                     index = VectorStoreIndex.from_documents(
@@ -80,6 +105,27 @@ class RAGService:
             print(f"Ingestion Error: {e}")
             return {"status": "error", "message": str(e)}
 
+    def _ensure_fts_index(self):
+        """
+        Ensure Full Text Search (FTS) index exists for Hybrid Search.
+        """
+        try:
+            import lancedb
+            db = lancedb.connect(settings.LANCEDB_URI)
+            if settings.TABLE_NAME in db.table_names():
+                tbl = db.open_table(settings.TABLE_NAME)
+                try:
+                    # Create FTS index on the 'text' field (LlamaIndex default content field)
+                    # replace=False means it won't rebuild if exists (LanceDB handles this)
+                    # Note: FTS creation might fail if table is empty
+                    if len(tbl) > 0:
+                        tbl.create_fts_index("text", replace=False)
+                        print("FTS index verified/created.")
+                except Exception as e:
+                    print(f"Warning: Could not create FTS index (Table might be empty or locked): {e}")
+        except Exception as e:
+            print(f"Error checking FTS index: {e}")
+
     def _initialize_chat_engine(self, domain: str):
         """
         Initialize the ContextChatEngine with specific domain prompts.
@@ -87,6 +133,9 @@ class RAGService:
         try:
             # Load index from storage
             index = VectorStoreIndex.from_vector_store(vector_store=self.vector_store)
+
+            # Ensure FTS availability for Hybrid Search
+            self._ensure_fts_index()
 
             # Determine system prompt based on domain
             system_prompt = "You are a helpful AI assistant."
@@ -104,16 +153,24 @@ class RAGService:
             except Exception as e:
                 print(f"Warning: Failed to load prompt: {e}")
 
-            # Initialize Chat Engine (Context Mode)
-            # chat_mode='context' retrieves context from index and puts it in system message
-            self.chat_engine = index.as_chat_engine(
-                chat_mode="context",
+            # Initialize Chat Engine (Context Mode) with Hybrid Search
+            # We construct it manually to pass retriever args
+
+            # Hybrid Retriever: combines Vector Search + Keyword Search (FTS)
+            retriever = index.as_retriever(
+                similarity_top_k=5,
+                vector_store_query_mode="hybrid", # Enable Hybrid in LanceDB
+                alpha=0.6 # Weight for Semantic (0.6) vs Keyword (0.4)
+            )
+
+            from llama_index.core.chat_engine import ContextChatEngine
+            self.chat_engine = ContextChatEngine.from_defaults(
+                retriever=retriever,
                 llm=self.llm,
-                system_prompt=system_prompt,
-                similarity_top_k=5
+                system_prompt=system_prompt
             )
             self.current_domain = domain
-            print(f"Chat Engine initialized for domain: {domain}")
+            print(f"Chat Engine initialized for domain: {domain} (Hybrid Search Enabled)")
 
         except Exception as e:
             print(f"Error initializing chat engine: {e}")
