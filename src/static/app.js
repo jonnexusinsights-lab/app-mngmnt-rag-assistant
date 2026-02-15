@@ -145,26 +145,36 @@ async function clearChat() {
 
 // --- Document Functions ---
 async function uploadFile() {
-  const file = dom.pdfUpload.files[0];
-  if (!file) return alert("Select a PDF first.");
+  const files = dom.pdfUpload.files;
+  if (!files || files.length === 0) return alert("Select at least one PDF.");
 
   dom.uploadStatus.textContent = "Uploading & Ingesting...";
 
   const formData = new FormData();
-  formData.append("file", file);
+  for (let i = 0; i < files.length; i++) {
+    formData.append("files", files[i]);
+  }
 
   try {
     const res = await fetch(API.ingest, { method: "POST", body: formData });
     const data = await res.json();
 
-    if (data.status === "success") {
-      dom.uploadStatus.textContent = `Success! (${data.chunks} chunks)`;
+    if (res.ok) {
+      let msg = `Success! ${data.message}`;
+      if (data.errors && data.errors.length > 0) {
+        msg += ` (${data.errors.length} errors)`;
+        console.error(data.errors);
+      }
+      dom.uploadStatus.textContent = msg;
       loadDocuments(); // Refresh list
+      dom.pdfUpload.value = ""; // Clear input
     } else {
-      dom.uploadStatus.textContent = "Error: " + data.message;
+      dom.uploadStatus.textContent =
+        "Error: " + (data.detail || "Upload failed");
     }
   } catch (e) {
     dom.uploadStatus.textContent = "Upload failed.";
+    console.error(e);
   }
 }
 
