@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+from typing import List, Optional, Any, Dict, Union
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext
 from llama_index.vector_stores.lancedb import LanceDBVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -14,7 +16,8 @@ from src.core.errors import (
     LLMServiceError,
     VectorDatabaseError,
     DocumentIngestionError,
-    InfrastructureError
+    InfrastructureError,
+    BaseAppError
 )
 
 class CustomReranker(BaseNodePostprocessor):
@@ -25,11 +28,11 @@ class CustomReranker(BaseNodePostprocessor):
     top_n: int = Field(default=3)
     _model: CrossEncoder = PrivateAttr()
 
-    def __init__(self, model_name: str, top_n: int = 3):
+    def __init__(self, model_name: str, top_n: int = 3) -> None:
         super().__init__(top_n=top_n)
         self._model = CrossEncoder(model_name)
 
-    def _postprocess_nodes(self, nodes: list[NodeWithScore], query_bundle: QueryBundle | None = None) -> list[NodeWithScore]:
+    def _postprocess_nodes(self, nodes: List[NodeWithScore], query_bundle: Optional[QueryBundle] = None) -> List[NodeWithScore]:
         if not nodes:
             return []
 
@@ -52,9 +55,16 @@ class CustomReranker(BaseNodePostprocessor):
         return nodes[:self.top_n]
 
 class RAGService:
-    def __init__(self):
+    embed_model: HuggingFaceEmbedding
+    llm: Ollama
+    vector_store: LanceDBVectorStore
+    storage_context: StorageContext
+    reranker: CustomReranker
+    chat_engine: Optional[Any] # Specific LlamaIndex types can be complex, Any is safer for top-level engine
+    current_domain: Optional[str]
+
+    def __init__(self) -> None:
         # Initialize Embedding Model (Local)
-        # This might take time to download on first run
         self.embed_model = HuggingFaceEmbedding(model_name=settings.EMBEDDING_MODEL_NAME)
         LlamaSettings.embed_model = self.embed_model
 
@@ -66,45 +76,38 @@ class RAGService:
             raise LLMServiceError(f"Could not initialize Ollama: {str(e)}") from e
 
         # Initialize LanceDB
-        # mode="append" ensures we don't wipe the table on initialization/connection
-        # However, if table doesn't exist, it should create it.
         self.vector_store = LanceDBVectorStore(
-            uri=settings.LANCEDB_URI,
+            uri=str(settings.LANCEDB_URI),
             table_name=settings.TABLE_NAME,
             mode="append"
         )
         self.storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
 
         # Reranker (Cross-Encoder)
-        # Use a lightweight but effective model
         self.reranker = CustomReranker(
             model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",
-            top_n=3 # Rerank top-k (5) -> top-n (3)
+            top_n=3
         )
 
         # Chat Engine State
         self.chat_engine = None
         self.current_domain = None
 
-    def ingest_documents(self, file_paths: list[str]):
+    def ingest_documents(self, file_paths: List[Union[str, Path]]) -> Dict[str, Any]:
         """
         Ingest a list of documents into the vector store (Append mode).
         Standardizes metadata to prevent schema mismatches and data loss.
         """
         try:
-            # 1. Load Data
-            documents = SimpleDirectoryReader(input_files=file_paths).load_data()
+            # 1. Load Data (Convert to strings for SimpleDirectoryReader)
+            str_paths = [str(p) for p in file_paths]
+            documents = SimpleDirectoryReader(input_files=str_paths).load_data()
 
-            # 2. Standardize Metadata (Crucial to prevent schema errors)
-            # LanceDB is strict about schema. If a new doc has numeric 'page_label'
-            # and old docs had string, or missing keys, it might fail.
-            # 2. Standardize Metadata (Crucial to prevent schema errors)
-            # LanceDB is strict. Table only has 'file_name', 'page_label'.
-            # SimpleDirectoryReader adds 'file_path', 'creation_date', etc. which causes mismatch.
-            allowed_keys = ["file_name", "page_label"]
+            # 2. Standardize Metadata
             for doc in documents:
                 # 1. Capture vital info before filtering
-                f_name = doc.metadata.get("file_name") or os.path.basename(doc.metadata.get("file_path", file_paths[0]))
+                f_path = Path(doc.metadata.get("file_path", str_paths[0]))
+                f_name = doc.metadata.get("file_name") or f_path.name
                 p_label = doc.metadata.get("page_label", "1")
 
                 # 2. Replace metadata with ONLY allowed keys
@@ -144,29 +147,25 @@ class RAGService:
                 raise e
             raise DocumentIngestionError(f"Ingestion failed: {str(e)}") from e
 
-    def _ensure_fts_index(self):
+    def _ensure_fts_index(self) -> None:
         """
         Ensure Full Text Search (FTS) index exists for Hybrid Search.
         """
         try:
             import lancedb
-            db = lancedb.connect(settings.LANCEDB_URI)
+            db = lancedb.connect(str(settings.LANCEDB_URI))
             if settings.TABLE_NAME in db.table_names():
                 tbl = db.open_table(settings.TABLE_NAME)
                 try:
-                    # Create FTS index on the 'text' field (LlamaIndex default content field)
-                    # replace=False means it won't rebuild if exists (LanceDB handles this)
-                    # Note: FTS creation might fail if table is empty
                     if len(tbl) > 0:
-                        # Use replace=True to rebuild the FTS index for new documents
                         tbl.create_fts_index("text", replace=True)
                         print("FTS index verified/created.")
                 except Exception as e:
-                    print(f"Warning: Could not create FTS index (Table might be empty or locked): {e}")
+                    print(f"Warning: Could not create FTS index: {e}")
         except Exception as e:
             print(f"Error checking FTS index: {e}")
 
-    def _initialize_chat_engine(self, domain: str):
+    def _initialize_chat_engine(self, domain: str) -> None:
         """
         Initialize the ContextChatEngine with specific domain prompts.
         """
@@ -237,7 +236,7 @@ class RAGService:
             print(f"Query rewrite failed: {e}")
             return query
 
-    def query(self, message: str, domain: str = "hr"):
+    def query(self, message: str, domain: str = "hr") -> Dict[str, Any]:
         """
         Chat with the RAG engine (Stateful).
         """
@@ -295,7 +294,7 @@ class RAGService:
                 raise e
             raise InfrastructureError(f"Error querying RAG: {str(e)}") from e
 
-    def reset(self):
+    def reset(self) -> bool:
         """
         Reset the chat history.
         """
@@ -304,37 +303,30 @@ class RAGService:
             return True
         return False
 
-    def list_documents(self):
+    def list_documents(self) -> List[str]:
         """
         List all ingested documents by querying LanceDB metadata.
         """
         try:
             import lancedb
-            db = lancedb.connect(settings.LANCEDB_URI)
+            db = lancedb.connect(str(settings.LANCEDB_URI))
             if settings.TABLE_NAME not in db.table_names():
                 return []
 
             tbl = db.open_table(settings.TABLE_NAME)
 
-            # Fetch all rows, but only metadata column.
-            # Note: For large datasets this is inefficient (O(N)), but fine for MVP.
-            # LanceDB doesn't support 'DISTINCT' queries directly yet via simple API.
             try:
-                # Try pandas if available for ease
-                # Some versions of lancedb.to_pandas() do not accept 'columns' or 'flatten' args
+                # Flat distinct list of file names
                 df = tbl.to_pandas()
                 files = set()
 
-                # Check if 'metadata' column exists
                 if "metadata" in df.columns:
                     for _, row in df.iterrows():
                         meta = row.get("metadata", {})
-                        # Metadata might be a dict or a string depending on ingestion
                         if isinstance(meta, dict) and "file_name" in meta:
                             files.add(meta["file_name"])
                 return sorted(list(files))
             except ImportError:
-                # Fallback to Arrow if pandas is missing
                 arrow_tbl = tbl.to_arrow()
                 files = set()
                 if "metadata" in arrow_tbl.column_names:
@@ -349,20 +341,19 @@ class RAGService:
             print(f"Error listing documents: {e}")
             return []
 
-    def delete_document(self, filename: str):
+    def delete_document(self, filename: str) -> bool:
         """
         Delete a document from the vector store by filename.
         """
         try:
             import lancedb
-            db = lancedb.connect(settings.LANCEDB_URI)
+            db = lancedb.connect(str(settings.LANCEDB_URI))
             if settings.TABLE_NAME not in db.table_names():
                 return False
 
             tbl = db.open_table(settings.TABLE_NAME)
 
             # Delete syntax: table.delete("metadata.file_name = 'value'")
-            # Escape filename just in case
             safe_filename = filename.replace("'", "''")
             tbl.delete(f"metadata.file_name = '{safe_filename}'")
 
