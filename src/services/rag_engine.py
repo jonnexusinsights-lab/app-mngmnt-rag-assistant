@@ -10,6 +10,12 @@ from sentence_transformers import CrossEncoder
 from pydantic import Field, PrivateAttr
 from src.core.config import settings
 from src.core.prompts import prompt_manager
+from src.core.errors import (
+    LLMServiceError,
+    VectorDatabaseError,
+    DocumentIngestionError,
+    InfrastructureError
+)
 
 class CustomReranker(BaseNodePostprocessor):
     """
@@ -57,8 +63,7 @@ class RAGService:
             self.llm = Ollama(base_url=settings.OLLAMA_BASE_URL, model=settings.LLM_MODEL, request_timeout=300.0)
             LlamaSettings.llm = self.llm
         except Exception as e:
-            print(f"Critical Error: Could not initialize Ollama: {e}")
-            raise e
+            raise LLMServiceError(f"Could not initialize Ollama: {str(e)}") from e
 
         # Initialize LanceDB
         # mode="append" ensures we don't wipe the table on initialization/connection
@@ -112,49 +117,20 @@ class RAGService:
             try:
                 # Load index from storage
                 index = VectorStoreIndex.from_vector_store(vector_store=self.vector_store)
-
-                # Check if table exists (via simple query or checking tables) to avoid 'Table not found' on insert
-                # LanceDBVectorStore handles this usually, but let's be safe.
-
-                index.insert_nodes(documents) # Insert as nodes/documents
-
-                # Debug: Check table size
-                import lancedb
-                _db = lancedb.connect(settings.LANCEDB_URI)
-                if settings.TABLE_NAME in _db.table_names():
-                    _tbl = _db.open_table(settings.TABLE_NAME)
-                    print(f"Debug: Table size after insert: {len(_tbl)}")
-
+                index.insert_nodes(documents)
                 print(f"Appended {len(documents)} documents to existing index.")
             except Exception as e:
-                # 4. Handle Case: Index/Table doesn't exist yet OR Schema Mismatch (Recoverable)
-                print(f"Insert failed/Index not found ({e}). Attempting to create new index (Merging schema if possible)...")
-
-                # If it's a schema mismatch, LanceDB might throw.
-                # In a production "Append" scenario, we shouldn't drop the table unless explicitly requested.
-                # But for this MVP, if the table exists and is incompatible, we previously dropped it.
-                # To FIX DATA LOSS: We will try to merge or ignore, but if we MUST drop, we should warn.
-                # For now, let's assume 'Standardized Metadata' fixes 90% of issues.
-                # If it fails, we fall back to creating from scratch ONLY if table is missing.
-
+                # 4. Handle Case: Index/Table doesn't exist yet OR Schema Mismatch
                 import lancedb
                 db = lancedb.connect(settings.LANCEDB_URI)
                 if settings.TABLE_NAME not in db.table_names():
                      # Create fresh
-                     index = VectorStoreIndex.from_documents(
+                     VectorStoreIndex.from_documents(
                         documents,
                         storage_context=self.storage_context
                     )
                 else:
-                    # Table exists but insert failed.
-                    # It could be a true schema conflict.
-                    # We will log error but NOT DROP TABLE automatically to preserve data.
-                    print("CRITICAL: Failed to append to existing table. Schema mismatch likely.")
-                    print("To fix: Standardize your document metadata or manually reset the DB if this is a fresh start.")
-                    # For MVP "Auto-fix" behavior (User requested "Context" capability implies adding to it, not replacing):
-                    # We re-raise to alert the user, rather than silently wiping data.
-                    # OR we could try to coerce schema.
-                    raise e
+                    raise VectorDatabaseError(f"Failed to append to existing table: {str(e)}") from e
 
             # Force FTS re-creation/verification
             self._ensure_fts_index()
@@ -164,8 +140,9 @@ class RAGService:
 
             return {"status": "success", "chunks": len(documents)}
         except Exception as e:
-            print(f"Ingestion Error: {e}")
-            return {"status": "error", "message": str(e)}
+            if isinstance(e, BaseAppError):
+                raise e
+            raise DocumentIngestionError(f"Ingestion failed: {str(e)}") from e
 
     def _ensure_fts_index(self):
         """
@@ -237,8 +214,7 @@ class RAGService:
             print(f"Chat Engine initialized for domain: {domain} (Hybrid Search + Reranking Enabled)")
 
         except Exception as e:
-            print(f"Error initializing chat engine: {e}")
-            raise e
+            raise InfrastructureError(f"Error initializing chat engine: {str(e)}") from e
 
     def rewrite_query(self, query: str) -> str:
         """
@@ -315,10 +291,9 @@ class RAGService:
                 "sources": sources
             }
         except Exception as e:
-            return {
-                "response": f"Error querying RAG: {str(e)}",
-                "sources": []
-            }
+            if isinstance(e, BaseAppError):
+                raise e
+            raise InfrastructureError(f"Error querying RAG: {str(e)}") from e
 
     def reset(self):
         """
