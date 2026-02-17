@@ -1,32 +1,56 @@
-# Active Context: Project Setup
+# Active Context: Project Handoff
 
 ## Session Metadata
-- **Last Updated:** 2026-02-14
-- **Active Role:** Architect
-- **Mode:** PLANNING
 
-## Current Objective
-Initialize and configure the ACE-Framework for app-mngmnt-rag-assistant.
+- **Last Updated:** 2026-02-17
+- **Active Role:** Architect / Developer
+- **Mode:** HANDOFF
 
-## Current State
+## Accomplished
 
-### Working
-- ACE-Framework structure initialized
+- **Environment Setup**: Python 3.13, uvicorn, and ACE-Framework initialized.
+- **RAG Core Engine**:
+  - Integrated LlamaIndex with local HuggingFace embeddings (`BAAI/bge-small-en-v1.5`).
+  - Implemented LanceDB vector storage with metadata standardization to prevent schema mismatches.
+  - Added Hybrid Search (Vector + FTS) and Reranking (`ms-marco-MiniLM-L-6-v2`).
+  - Implemented Query Transformation (silent rewrite) for better retrieval accuracy.
+- **FastAPI Backend**:
+  - Created endpoints for `/ingest` (multi-file), `/chat` (stateful/domain-specific), `/documents` (list/delete), and `/reset`.
+  - Fixed uvicorn startup issues and command typos.
+- **Frontend**: Basic web UI for document management and chat interaction at `/static`.
+- **Git Sync**: Local `main` branch fully synchronized with `origin/main` (pulled 15 commits).
 
-### In Progress
-- Project customization
+## Current State of Components
 
-### Blocked
-- None
+- **FastAPI App (`src/main.py`)**: Fully functional. Handles multi-file ingestion, chat, and document management.
+- **RAG Service (`src/services/rag_engine.py`)**: Advanced pipeline active. Supports domain-specific prompts, hybrid search, and reranking.
+- **Storage**: LanceDB local storage at `./storage/lancedb`. Metadata standardized to `file_name` and `page_label`.
+- **Configuration**: Centralized in `src/core/config.py`.
 
-## Next Steps
-1. [ ] Customize .ace/standards/ for your tech stack
-2. [ ] Create ADR-001 for tech stack decisions
-3. [ ] Set up first feature specification
+## Pending Decisions
+
+- **Domain Expansion**: Currently supports `hr` and `tech`. New domains require YAML prompts in `src/prompts/`.
+- **LLM Selection**: Currently hardcoded to Ollama `llama3`. Evaluation of `llama3.1` or `mistral` pending.
+
+## Known Issues
+
+- **FTS Warm-up**: FTS index creation might fail silently if the table is empty during initialization; it auto-verifies on first ingestion.
+- **Deployment**: Local-only configuration for now. Needs containerization for cloud deployment.
+- **Error Handling**: Batch ingestion logs errors but continues processing; partial success is possible.
+
+## Recommended Next Steps
+
+1. [ ] **Prompt Engineering**: Refine `manager_sop.yaml` and `coding_standard.yaml` based on user feedback.
+2. [ ] **Evaluation Cluster**: Set up a basic evaluation script to measure RAG accuracy.
+3. [ ] **UI Polish**: Enhance the `/static` frontend with better streaming feedback and source visualization.
+4. [ ] **Containerization**: Create a `Dockerfile` for easy deployment and replication.
+5. [ ] **Testing**: Increase coverage for `rag_engine` edge cases (e.g., malformed PDFs).
 
 ## Active Constraints
-- .ace/standards/coding.md
-- .ace/standards/security.md
+
+- Local-first architecture (Ollama + local embeddings).
+- LanceDB schema strictness requires metadata standardization.
 
 ## Session Notes
+
 - Framework initialized via create-ace-framework CLI

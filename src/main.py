@@ -1,13 +1,41 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import shutil
 import os
+import time
 from src.core.config import settings
 from src.services.rag_engine import rag_service
+from src.core.errors import BaseAppError, DomainError, InfrastructureError, ApplicationError
 
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION)
+
+# Global Exception Handler
+@app.exception_handler(BaseAppError)
+async def app_exception_handler(request: Request, exc: BaseAppError):
+    status_code = 500
+    if isinstance(exc, DomainError):
+        status_code = 400
+    elif isinstance(exc, ApplicationError):
+        status_code = 401 # Default for app errors, can be refined
+
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "errors": [
+                {
+                    "code": exc.__class__.__name__,
+                    "message": exc.message,
+                    "details": exc.details
+                }
+            ],
+            "meta": {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "path": request.url.path
+            }
+        }
+    )
 
 # Serve static files for Frontend
 app.mount("/static", StaticFiles(directory="src/static"), name="static")
@@ -32,64 +60,45 @@ async def ingest_documents(files: list[UploadFile] = File(...)):
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
-    uploaded_count = 0
-    errors = []
-
     # Create temporary directory if it doesn't exist
     temp_dir = "temp_ingest"
     os.makedirs(temp_dir, exist_ok=True)
 
+    saved_paths = []
     try:
-        saved_paths = []
         for file in files:
-            try:
-                # Sanitize filename
-                safe_filename = os.path.basename(file.filename)
-                file_location = os.path.join(temp_dir, safe_filename)
+            # Sanitize filename
+            safe_filename = os.path.basename(file.filename)
+            file_location = os.path.join(temp_dir, safe_filename)
 
-                with open(file_location, "wb+") as file_object:
-                    file_object.write(await file.read())
-                saved_paths.append(file_location)
-            except Exception as e:
-                errors.append(f"Failed to save {file.filename}: {str(e)}")
+            with open(file_location, "wb+") as file_object:
+                file_object.write(await file.read())
+            saved_paths.append(file_location)
 
         # Process the saved files
-        if saved_paths:
-            # Call the batch ingestion method
-            # Note: We need to ensure rag_engine has this method. It was added in previous steps.
-            result = rag_service.ingest_documents(saved_paths)
+        result = rag_service.ingest_documents(saved_paths)
+        return {
+            "message": "Processed batch.",
+            "total_files": len(files),
+            "engine_result": result
+        }
 
-            if result.get("status") == "success":
-                uploaded_count = result.get("chunks", 0) # API returns chunks count, or meaningful stats
-            else:
-                errors.append(f"Engine Ingestion Error: {result.get('message')}")
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
     finally:
         # Cleanup temp files
-        if 'saved_paths' in locals():
-            for path in saved_paths:
-                if os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except:
-                        pass
+        for path in saved_paths:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except:
+                    pass
         try:
              if os.path.exists(temp_dir) and not os.listdir(temp_dir):
                  os.rmdir(temp_dir)
         except:
             pass
 
-    return {
-        "message": f"Processed batch.",
-        "errors": errors,
-        "total_files": len(files)
-    }
-
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    # response is now a dict with 'response' and 'sources'
     return rag_service.query(request.message, request.domain)
 
 @app.post("/reset")
@@ -106,5 +115,5 @@ async def list_docs():
 async def delete_doc(filename: str):
     success = rag_service.delete_document(filename)
     if not success:
-         raise HTTPException(status_code=500, detail="Failed to delete document")
+         raise HTTPException(status_code=404, detail=f"Document {filename} not found or could not be deleted")
     return {"status": "success", "message": f"Deleted {filename}"}
