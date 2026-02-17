@@ -54,3 +54,5 @@
 ## Session Notes
 
 - Framework initialized via create-ace-framework CLI
+- Refactored error handling to typed hierarchy in `refactor/error-handling` branch.
+- Successfully pushed branch to GitHub: [refactor/error-handling](https://github.com/jonnexusinsights-lab/app-mngmnt-rag-assistant/tree/refactor/error-handling)
