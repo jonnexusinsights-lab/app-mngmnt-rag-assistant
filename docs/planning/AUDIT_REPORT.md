@@ -19,9 +19,8 @@ The project has made significant progress since the last audit. The core ACE Fra
 
 ### [INITIALIZING] Feature-Based Organization
 
-- **Current**: Mixed structure. `src/features/rag/` exists (Good), but `src/services/` (Empty/Pycache) and `src/core/` (Standard) also exist.
-- **Standard**: [Architecture Standard v1.0](.ace/standards/architecture.md#directory-structure) requires feature-based organization.
-- **Action**: Delete the empty `src/services/` directory to remove confusion.
+- **Current**: Correct structure. `src/features/rag/` exists. `src/services/` has been removed.
+- **Status**: Compliant.
 
 ### [NON-CONFORMING] Architecture Patterns
 
@@ -56,11 +55,10 @@ The project has made significant progress since the last audit. The core ACE Fra
 - `docs/rca/regression-guards.yaml` contains one active guard (`RCA-001`).
 - **Status**: Operational. Continue adding guards for every RCA.
 
-### [NOTICE] Health Observability
+### [CONFORMING] Health Observability
 
-- **Current**: Single `/health` endpoint in `src/main.py`.
-- **Standard**: [Observability Standard](.ace/standards/observability.md) presumably requires split `/health/live` and `/health/ready` endpoints.
-- **Action**: Update `src/main.py`.
+- **Current**: Split `/health/live` and `/health/ready` endpoints implemented in `src/main.py`.
+- **Standard**: Compliant with Observability Standard.
 
 ---
 
@@ -68,8 +66,6 @@ The project has made significant progress since the last audit. The core ACE Fra
 
 | Priority | Action                | Description                                           |
 | -------- | --------------------- | ----------------------------------------------------- |
-| **Med**  | Cleanup               | Delete `src/services` directory.                      |
-| **Med**  | Observability         | Implement Readiness/Liveness split in `main.py`.      |
 | **Low**  | Refactor `RagService` | Split into `IngestionService` and `RetrievalService`. |
 
 ---

@@ -95,5 +95,13 @@ class RagRepository:
             safe_filename = filename.replace("'", "''")
             tbl.delete(f"metadata.file_name = '{safe_filename}'")
             return True
-        except Exception as e:
+        except Exception:
+            return False
+
+    def is_healthy(self) -> bool:
+        try:
+            import lancedb
+            lancedb.connect(settings.LANCEDB_URI)
+            return True
+        except Exception:
             return False

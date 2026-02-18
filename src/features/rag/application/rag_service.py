@@ -190,4 +190,13 @@ class RagService:
         if success: self.chat_engine = None
         return success
 
+    def is_ready(self) -> bool:
+        # 1. Check Repository (LanceDB)
+        if not self.repository.is_healthy():
+            return False
+        # 2. Check LLM (Basic instantiation check)
+        if not self.llm:
+            return False
+        return True
+
 rag_service = RagService()

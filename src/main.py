@@ -69,6 +69,16 @@ async def favicon():
 async def health_check() -> dict[str, str]:
     return {"status": "healthy", "version": settings.APP_VERSION}
 
+@app.get("/health/live")
+async def liveness_check() -> dict[str, str]:
+    return {"status": "live", "version": settings.APP_VERSION}
+
+@app.get("/health/ready")
+async def readiness_check() -> dict[str, str]:
+    if not rag_service.is_ready():
+         raise HTTPException(status_code=503, detail="Service not ready")
+    return {"status": "ready", "version": settings.APP_VERSION}
+
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest_documents(files: list[UploadFile] = File(...)) -> IngestResponse:
     """
