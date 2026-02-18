@@ -1,4 +1,4 @@
-from src.services.rag_engine import rag_service
+from src.features.rag.application.rag_service import rag_service
 import os
 
 def test_ingest_append():
@@ -15,14 +15,14 @@ def test_ingest_append():
 
     try:
         print("Ingesting new document...")
-        result = rag_service.ingest_document(dummy_file)
+        result = rag_service.ingest_documents([dummy_file])
         print("Ingestion Result:", result)
 
         print("Querying for new keyword...")
         response = rag_service.query("What does the ZEBRA123 document say?")
-        print("Query Response:", response)
+        print("Query Response:", response.response)
 
-        if "ZEBRA123" in str(response) or "new appended document" in str(response).lower():
+        if "ZEBRA123" in response.response or "new appended document" in response.response.lower():
             print("SUCCESS: Found new document content.")
         else:
             print("WARNING: Did not find specific content (might be summarization issue or index overwrite).")

@@ -1,4 +1,4 @@
-from src.services.rag_engine import rag_service
+from src.features.rag.application.rag_service import rag_service
 import os
 
 def test_ingestion():
@@ -8,10 +8,10 @@ def test_ingestion():
         return
 
     print(f"Ingesting {pdf_path}...")
-    result = rag_service.ingest_document(pdf_path)
+    result = rag_service.ingest_documents([pdf_path])
     print("Ingestion Result:", result)
 
-    if result.get("status") == "success":
+    if result.status == "success":
         print("Ingestion Successful!")
     else:
         print("Ingestion Failed.")

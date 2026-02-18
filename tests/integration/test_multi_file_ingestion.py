@@ -1,7 +1,7 @@
 import os
 from unittest.mock import MagicMock
 from llama_index.core import Document
-import src.services.rag_engine
+import src.features.rag.application.rag_service
 
 # 1. Mock SimpleDirectoryReader to avoid needing real PDFs
 class MockSimpleDirectoryReader:
@@ -19,8 +19,8 @@ class MockSimpleDirectoryReader:
         return docs
 
 # Apply Mock
-src.services.rag_engine.SimpleDirectoryReader = MockSimpleDirectoryReader
-from src.services.rag_engine import rag_service
+src.features.rag.application.rag_service.SimpleDirectoryReader = MockSimpleDirectoryReader
+from src.features.rag.application.rag_service import rag_service
 
 def test_persistence_logic():
     print("Testing Multi-File Ingestion & Persistence...")
@@ -35,7 +35,7 @@ def test_persistence_logic():
     res = rag_service.ingest_documents(files)
     print(f"Result: {res}")
 
-    if res["status"] != "success":
+    if res.status != "success":
         print("FAIL: Batch ingestion failed.")
     else:
         print("PASS: Batch ingestion success.")
@@ -48,7 +48,7 @@ def test_persistence_logic():
     res2 = rag_service.ingest_documents(["doc_c.pdf"])
     print(f"Result: {res2}")
 
-    if res2["status"] == "success":
+    if res2.status == "success":
         print("PASS: Append successful (Simulated).")
     else:
         print("FAIL: Append failed.")

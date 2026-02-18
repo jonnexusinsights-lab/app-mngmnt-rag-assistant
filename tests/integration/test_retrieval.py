@@ -1,4 +1,4 @@
-from src.services.rag_engine import rag_service
+from src.features.rag.application.rag_service import rag_service
 import sys
 
 def test_retrieval():
@@ -13,9 +13,9 @@ def test_retrieval():
     try:
         response = rag_service.query(query)
         print("\nResponse:")
-        print(response)
+        print(response.response)
 
-        if "RAG Test Document" in response or "standard operating procedures" in response.lower() or "test document" in response.lower():
+        if "RAG Test Document" in response.response or "standard operating procedures" in response.response.lower() or "test document" in response.response.lower():
              print("\nTest Passed: Retrieved relevant content.")
         else:
              print("\nTest Warning: Response might not be relevant (check model quality).")

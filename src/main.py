@@ -1,21 +1,36 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import List, Dict, Any
+from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import os
 import time
-from pathlib import Path
 from src.core.config import settings
-from src.services.rag_engine import rag_service
-from src.core.errors import BaseAppError, DomainError, InfrastructureError, ApplicationError
+from src.features.rag.application.rag_service import rag_service
+from src.features.rag.api.dtos import (
+    ChatRequest,
+    GenericResponse,
+    IngestResponse,
+    DocumentListResponse,
+    DeleteResponse,
+    QueryResult
+)
+from src.shared.errors.app_errors import BaseAppError, DomainError, InfrastructureError, ApplicationError
 
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION)
 
+# Security: CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["*"],
+)
+
 # Global Exception Handler
 @app.exception_handler(BaseAppError)
-async def app_exception_handler(request: Request, exc: BaseAppError) -> JSONResponse:
+async def app_exception_handler(request: Request, exc: BaseAppError):
     status_code = 500
     if isinstance(exc, DomainError):
         status_code = 400
@@ -42,20 +57,20 @@ async def app_exception_handler(request: Request, exc: BaseAppError) -> JSONResp
 # Serve static files for Frontend
 app.mount("/static", StaticFiles(directory="src/static"), name="static")
 
-class ChatRequest(BaseModel):
-    message: str
-    domain: str = "hr"
-
 @app.get("/")
-async def root() -> Dict[str, str]:
+async def root():
     return {"message": "ACE-Framework RAG Assistant is running"}
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
 @app.get("/health")
-async def health_check() -> Dict[str, str]:
+async def health_check() -> dict[str, str]:
     return {"status": "healthy", "version": settings.APP_VERSION}
 
-@app.post("/ingest")
-async def ingest_documents(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
+@app.post("/ingest", response_model=IngestResponse)
+async def ingest_documents(files: list[UploadFile] = File(...)) -> IngestResponse:
     """
     Ingest multiple documents into the RAG system.
     """
@@ -63,18 +78,14 @@ async def ingest_documents(files: List[UploadFile] = File(...)) -> Dict[str, Any
         raise HTTPException(status_code=400, detail="No files provided")
 
     # Create temporary directory if it doesn't exist
-    temp_dir = Path("temp_ingest")
-    temp_dir.mkdir(exist_ok=True)
+    temp_dir = "temp_ingest"
+    os.makedirs(temp_dir, exist_ok=True)
 
-    saved_paths: List[Path] = []
+    saved_paths: list[str] = []
     try:
         for file in files:
-            # Sanitize filename
-            if not file.filename:
-                continue
-
-            safe_filename = Path(file.filename).name
-            file_location = temp_dir / safe_filename
+            safe_filename = os.path.basename(str(file.filename))
+            file_location = os.path.join(temp_dir, safe_filename)
 
             with open(file_location, "wb+") as file_object:
                 file_object.write(await file.read())
@@ -82,43 +93,46 @@ async def ingest_documents(files: List[UploadFile] = File(...)) -> Dict[str, Any
 
         # Process the saved files
         result = rag_service.ingest_documents(saved_paths)
-        return {
-            "message": "Processed batch.",
-            "total_files": len(files),
-            "engine_result": result
-        }
+        return IngestResponse(
+            message="Processed batch.",
+            total_files=len(files),
+            engine_result=result
+        )
 
     finally:
         # Cleanup temp files
         for path in saved_paths:
-            if path.exists():
+            if os.path.exists(path):
                 try:
-                    path.unlink()
-                except Exception:
+                    os.remove(path)
+                except:
                     pass
         try:
-             if temp_dir.exists() and not any(temp_dir.iterdir()):
-                 temp_dir.rmdir()
-        except Exception:
+             if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+                 os.rmdir(temp_dir)
+        except:
             pass
 
-@app.post("/chat")
-async def chat(request: ChatRequest) -> Dict[str, Any]:
+@app.post("/chat", response_model=QueryResult)
+async def chat(request: ChatRequest) -> QueryResult:
     return rag_service.query(request.message, request.domain)
 
-@app.post("/reset")
-async def reset_chat() -> Dict[str, Any]:
+@app.post("/reset", response_model=GenericResponse)
+async def reset_chat() -> GenericResponse:
     success = rag_service.reset()
-    return {"status": "success" if success else "error", "message": "Chat history cleared"}
+    return GenericResponse(
+        status="success" if success else "error",
+        message="Chat history cleared"
+    )
 
-@app.get("/documents")
-async def list_docs() -> Dict[str, List[str]]:
+@app.get("/documents", response_model=DocumentListResponse)
+async def list_docs() -> DocumentListResponse:
     docs = rag_service.list_documents()
-    return {"documents": docs}
+    return DocumentListResponse(documents=docs)
 
-@app.delete("/documents/{filename}")
-async def delete_doc(filename: str) -> Dict[str, str]:
+@app.delete("/documents/{filename}", response_model=DeleteResponse)
+async def delete_doc(filename: str) -> DeleteResponse:
     success = rag_service.delete_document(filename)
     if not success:
          raise HTTPException(status_code=404, detail=f"Document {filename} not found or could not be deleted")
-    return {"status": "success", "message": f"Deleted {filename}"}
+    return DeleteResponse(status="success", message=f"Deleted {filename}")

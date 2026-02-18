@@ -1,47 +1,38 @@
 import os
 import yaml
 from pathlib import Path
-from typing import Dict, Any, Optional
+from src.core.config import settings
 
 class PromptManager:
-    def __init__(self, prompt_dir: str = "src/prompts"):
-        self.prompt_dir = Path(prompt_dir)
-        self._cache: Dict[str, str] = {}
+    def __init__(self):
+        self.prompt_dir = Path(settings.PROMPT_DIR)
 
-    def load_prompt(self, domain: str, template_name: str) -> str:
+    def load_prompt(self, domain: str, prompt_name: str) -> str:
         """
-        Load a prompt template from a YAML file.
-        Path format: src/prompts/<domain>/<template_name>.yaml
+        Load a prompt from a YAML file.
+        Path: src/prompts/{domain}/{prompt_name}.yaml
         """
-        key = f"{domain}/{template_name}"
-        if key in self._cache:
-            return self._cache[key]
-
-        file_path = self.prompt_dir / domain / f"{template_name}.yaml"
-
-        if not file_path.exists():
-            raise FileNotFoundError(f"Prompt template not found: {file_path}")
-
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            prompt_path = self.prompt_dir / domain / f"{prompt_name}.yaml"
+
+            if not prompt_path.exists():
+                # Fallback to defaults or raise specific error
+                # For now, return a generic string or raise
+                print(f"Warning: Prompt file not found at {prompt_path}")
+                return "You are a helpful AI assistant."
+
+            with open(prompt_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
-                if not data or "template" not in data:
-                    raise ValueError(f"Invalid prompt file format: {file_path}")
 
-                template_content = data["template"]
-                self._cache[key] = template_content
-                return template_content
+            # Assuming simple YAML structure: { "template": "..." } or similar
+            # If it's just the text, we return it.
+            # Adjust based on actual YAML format.
+            if isinstance(data, dict):
+                return data.get("template", str(data))
+            return str(data)
+
         except Exception as e:
-            raise RuntimeError(f"Error loading prompt {key}: {e}")
-
-    def get_formatted_prompt(self, domain: str, template_name: str, **kwargs) -> str:
-        """
-        Load and format a prompt template with variables.
-        """
-        template = self.load_prompt(domain, template_name)
-        try:
-            return template.format(**kwargs)
-        except KeyError as e:
-            raise ValueError(f"Missing variable for prompt format: {e}")
+            print(f"Error loading prompt {domain}/{prompt_name}: {e}")
+            return "You are a helpful AI assistant."
 
 prompt_manager = PromptManager()

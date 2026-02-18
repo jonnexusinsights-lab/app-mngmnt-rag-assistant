@@ -1,4 +1,4 @@
-from src.services.rag_engine import rag_service
+from src.features.rag.application.rag_service import rag_service
 import sys
 
 def test_chat_history():
@@ -17,16 +17,16 @@ def test_chat_history():
     q1 = "What documents are usually required for travel reimbursement?"
     print(f"User: {q1}")
     r1 = rag_service.query(q1, domain="hr")
-    print(f"Agent: {r1['response'][:100]}...")
+    print(f"Agent: {r1.response[:100]}...")
 
     print("\n--- Turn 2 (Follow-up) ---")
     q2 = "Are receipts mandatory for that?"
     # "that" refers to "travel reimbursement"
     print(f"User: {q2}")
     r2 = rag_service.query(q2, domain="hr")
-    print(f"Agent: {r2['response'][:100]}...")
+    print(f"Agent: {r2.response[:100]}...")
 
-    if "reimbursement" in r2['response'].lower() or "receipt" in r2['response'].lower():
+    if "reimbursement" in r2.response.lower() or "receipt" in r2.response.lower():
         print("SUCCESS: Context seems to be maintained (Agent understood the context).")
     else:
         print("WARNING: Context might be missed. Check response relevance.")
@@ -38,9 +38,9 @@ def test_chat_history():
     q3 = "Are receipts mandatory for that?"
     print(f"User: {q3}")
     r3 = rag_service.query(q3, domain="hr")
-    print(f"Agent: {r3['response'][:100]}...")
+    print(f"Agent: {r3.response[:100]}...")
 
-    if "context" in r3['response'].lower() or "what" in r3['response'].lower() or "clarify" in r3['response'].lower():
+    if "context" in r3.response.lower() or "what" in r3.response.lower() or "clarify" in r3.response.lower():
         print("SUCCESS: Context correctly lost after reset.")
     else:
         print("OBSERVATION: Agent response after reset. (Ideally should ask for clarification or fail to answer specific 'that').")
