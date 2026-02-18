@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -14,15 +15,11 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"  # Local robust model
 
     # Database Settings
-    LANCEDB_URI: str = "data/lancedb"
+    LANCEDB_URI: Path = Path("data/lancedb")
     TABLE_NAME: str = "sop_docs"
 
     # Prompt Repository
-    PROMPT_DIR: str = "src/prompts"
-
-    # RAG Settings
-    RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    DEFAULT_SYSTEM_PROMPT: str = "You are a helpful AI assistant."
+    PROMPT_DIR: Path = Path("src/prompts")
 
     class Config:
         env_file = ".env"

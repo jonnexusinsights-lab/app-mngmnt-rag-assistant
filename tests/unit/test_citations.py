@@ -1,4 +1,4 @@
-from src.services.rag_engine import rag_service
+from src.features.rag.application.rag_service import rag_service
 import sys
 
 def test_citations():

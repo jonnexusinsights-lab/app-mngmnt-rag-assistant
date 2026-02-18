@@ -1,7 +1,7 @@
 import sys
 from unittest.mock import MagicMock
 from llama_index.core import Document
-import src.services.rag_engine
+import src.features.rag.application.rag_service
 
 # Mock SimpleDirectoryReader
 class MockSimpleDirectoryReader:
@@ -16,8 +16,8 @@ class MockSimpleDirectoryReader:
         ]
 
 # Apply Mock
-src.services.rag_engine.SimpleDirectoryReader = MockSimpleDirectoryReader
-from src.services.rag_engine import rag_service
+src.features.rag.application.rag_service.SimpleDirectoryReader = MockSimpleDirectoryReader
+from src.features.rag.application.rag_service import rag_service
 
 def test_query_transformation():
     print("Testing Query Transformation...")
@@ -36,7 +36,7 @@ def test_reranking():
 
     # Ingest dummy data
     print("Ingesting dummy documents (Mocked)...")
-    res = rag_service.ingest_document("dummy.pdf")
+    res = rag_service.ingest_documents(["dummy.pdf"])
     print(f"Ingestion result: {res}")
 
     query = "error 500"
@@ -44,16 +44,16 @@ def test_reranking():
     # Query with tech domain
     result = rag_service.query(query, domain="tech")
     print("\nResponse:")
-    print(result["response"][:200] + "...")
+    print(result.response[:200] + "...")
 
     print("\nSources (Top 3 expected):")
-    for src in result["sources"]:
-        print(f"- {src['file']} (Score: {src['score']})")
+    for src in result.sources:
+        print(f"- {src.file} (Score: {src.score})")
 
-    if result["sources"]:
+    if result.sources:
         print("PASS: Retrieval returned sources.")
         # Check scores?
-        scores = [s['score'] for s in result['sources']]
+        scores = [s.score for s in result.sources]
         print(f"Scores: {scores}")
         if any(s > 100 for s in scores) or any(s < 0 for s in scores):
              # Logits can be anything. But checking they exist is good enough.
