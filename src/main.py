@@ -6,7 +6,8 @@ import shutil
 import os
 import time
 from src.core.config import settings
-from src.features.rag.application.rag_service import rag_service
+from src.features.rag.application.ingestion_service import ingestion_service
+from src.features.rag.application.retrieval_service import retrieval_service
 from src.features.rag.api.dtos import (
     ChatRequest,
     GenericResponse,
@@ -75,8 +76,8 @@ async def liveness_check() -> dict[str, str]:
 
 @app.get("/health/ready")
 async def readiness_check() -> dict[str, str]:
-    if not rag_service.is_ready():
-         raise HTTPException(status_code=503, detail="Service not ready")
+    if not (ingestion_service.is_healthy() and retrieval_service.is_ready()):
+         raise HTTPException(status_code=53, detail="Service not ready")
     return {"status": "ready", "version": settings.APP_VERSION}
 
 @app.post("/ingest", response_model=IngestResponse)
@@ -102,7 +103,7 @@ async def ingest_documents(files: list[UploadFile] = File(...)) -> IngestRespons
             saved_paths.append(file_location)
 
         # Process the saved files
-        result = rag_service.ingest_documents(saved_paths)
+        result = ingestion_service.ingest_documents(saved_paths)
         return IngestResponse(
             message="Processed batch.",
             total_files=len(files),
@@ -125,11 +126,11 @@ async def ingest_documents(files: list[UploadFile] = File(...)) -> IngestRespons
 
 @app.post("/chat", response_model=QueryResult)
 async def chat(request: ChatRequest) -> QueryResult:
-    return rag_service.query(request.message, request.domain)
+    return retrieval_service.query(request.message, request.domain)
 
 @app.post("/reset", response_model=GenericResponse)
 async def reset_chat() -> GenericResponse:
-    success = rag_service.reset()
+    success = retrieval_service.reset()
     return GenericResponse(
         status="success" if success else "error",
         message="Chat history cleared"
@@ -137,12 +138,12 @@ async def reset_chat() -> GenericResponse:
 
 @app.get("/documents", response_model=DocumentListResponse)
 async def list_docs() -> DocumentListResponse:
-    docs = rag_service.list_documents()
+    docs = ingestion_service.list_documents()
     return DocumentListResponse(documents=docs)
 
 @app.delete("/documents/{filename}", response_model=DeleteResponse)
 async def delete_doc(filename: str) -> DeleteResponse:
-    success = rag_service.delete_document(filename)
+    success = ingestion_service.delete_document(filename)
     if not success:
          raise HTTPException(status_code=404, detail=f"Document {filename} not found or could not be deleted")
     return DeleteResponse(status="success", message=f"Deleted {filename}")

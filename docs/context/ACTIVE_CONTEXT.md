@@ -23,7 +23,7 @@
 ## Current State of Components
 
 - **FastAPI App (`src/main.py`)**: Fully functional. Handles multi-file ingestion, chat, and document management.
-- **RAG Service (`src/features/rag/application/rag_service.py`)**: Advanced pipeline active. Supports domain-specific prompts, hybrid search, and reranking.
+- **RAG Core**: Split into `IngestionService` and `RetrievalService` (LlamaIndex + LanceDB).
 - **Storage**: LanceDB local storage at `./storage/lancedb`. Metadata standardized to `file_name` and `page_label`.
 - **Configuration**: Centralized in `src/core/config.py`.
 

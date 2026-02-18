@@ -1,8 +1,6 @@
-import os
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core import VectorStoreIndex, Settings as LlamaSettings
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.ollama import Ollama
-from llama_index.core import Settings as LlamaSettings
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import NodeWithScore, QueryBundle
 from sentence_transformers import CrossEncoder
@@ -11,13 +9,11 @@ from src.core.config import settings
 from src.core.prompts import prompt_manager
 from src.features.rag.infrastructure.rag_repository import RagRepository
 from src.features.rag.api.dtos import (
-    IngestionResult,
-    SourceNode,
-    QueryResult
+    QueryResult,
+    SourceNode
 )
 from src.shared.errors.app_errors import (
     LLMServiceError,
-    DocumentIngestionError,
     InfrastructureError,
     BaseAppError
 )
@@ -44,7 +40,7 @@ class CustomReranker(BaseNodePostprocessor):
         nodes.sort(key=lambda x: x.score, reverse=True)
         return nodes[:self.top_n]
 
-class RagService:
+class RetrievalService:
     repository: RagRepository
     embed_model: HuggingFaceEmbedding
     llm: Ollama
@@ -74,30 +70,6 @@ class RagService:
 
         self.chat_engine = None
         self.current_domain = None
-
-    def ingest_documents(self, file_paths: list[str]) -> IngestionResult:
-        try:
-            documents = SimpleDirectoryReader(input_files=file_paths).load_data()
-
-            for doc in documents:
-                f_name = doc.metadata.get("file_name") or os.path.basename(doc.metadata.get("file_path", file_paths[0]))
-                p_label = doc.metadata.get("page_label", "1")
-                doc.metadata = {"file_name": str(f_name), "page_label": str(p_label)}
-
-            try:
-                # Try appending to existing index
-                index = self.repository.get_index()
-                index.insert_nodes(documents)
-            except Exception:
-                # Create new index if fails
-                self.repository.create_index_from_documents(documents)
-
-            self.repository.ensure_fts_index()
-            self.chat_engine = None
-            return IngestionResult(status="success", chunks=len(documents))
-        except Exception as e:
-            if isinstance(e, BaseAppError): raise e
-            raise DocumentIngestionError(f"Ingestion failed: {str(e)}") from e
 
     def _initialize_chat_engine(self, domain: str):
         try:
@@ -140,14 +112,14 @@ class RagService:
         )
         try:
             response = self.llm.complete(prompt)
-            return response.text.strip().replace('"', '')
+            return response.text.strip().replace('\"', '')
         except Exception:
             return query
 
     def query(self, message: str, domain: str = "hr") -> QueryResult:
         try:
             # Check if system has data
-            if not self.list_documents():
+            if not self.repository.list_documents():
                  return QueryResult(response="System is not ready. Please upload documents first.", sources=[])
 
             if self.chat_engine is None or self.current_domain != domain:
@@ -182,21 +154,11 @@ class RagService:
             return True
         return False
 
-    def list_documents(self) -> list[str]:
-        return self.repository.list_documents()
-
-    def delete_document(self, filename: str) -> bool:
-        success = self.repository.delete_document(filename)
-        if success: self.chat_engine = None
-        return success
-
     def is_ready(self) -> bool:
-        # 1. Check Repository (LanceDB)
         if not self.repository.is_healthy():
             return False
-        # 2. Check LLM (Basic instantiation check)
         if not self.llm:
             return False
         return True
 
-rag_service = RagService()
+retrieval_service = RetrievalService()
