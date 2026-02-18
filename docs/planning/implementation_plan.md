@@ -34,7 +34,7 @@
 
 - **Objective**: Implement the PDF ingestion pipeline using LlamaIndex, HuggingFace Embeddings, and LanceDB.
 - **Files**:
-  - `src/services/rag_engine.py` (Create)
+  - `src/features/rag/application/rag_service.py` (Create)
   - `src/core/config.py` (Update)
 - **Tests**:
   - Unit test: Transform a sample string to embedding using the local HF model
@@ -64,7 +64,7 @@
 
 - **Objective**: Implement the Agentic Retrieval loop using LlamaIndex.
 - **Files**:
-  - `src/services/rag_engine.py` (Update)
+  - `src/features/rag/application/rag_service.py` (Update)
 - **Tests**:
   - Integration: Query the RAG engine and get a response derived from the ingested PDF
 - **Acceptance Criteria**:

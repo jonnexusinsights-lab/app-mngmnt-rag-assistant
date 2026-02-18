@@ -22,7 +22,7 @@ guards:
     created: 2026-02-17
     rca_file: docs/rca/RCA-001-lancedb-table-not-found.md
     guarded_files:
-      - src/services/rag_engine.py
+      - src/features/rag/application/rag_service.py
     invariants:
       - "LanceDBVectorStore initialization must handle non-existent tables by using 'create' mode."
     review_triggers:
